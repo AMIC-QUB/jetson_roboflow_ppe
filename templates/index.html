@@ -1,25 +1,87 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>RealSense Roboflow Detections</title>
+  <head>
+    <meta charset="UTF-8" />
+    <title>AMIC Construction PPE Detection</title>
     <style>
-        body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        img {
-            max-width: 100%;
-            height: auto;
-        }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background-color: #1a1a1a; /* Near-black background */
+        color: #ffffff; /* White text for contrast */
+        font-family: Arial, sans-serif;
+      }
+      h1 {
+        margin: 20px 0;
+        font-size: 2em;
+      }
+      .video-container {
+        position: relative;
+        max-width: 100%;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+        border: 2px solid #ffffff;
+      }
+      .logo {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        width: 100px; /* Adjust size as needed */
+        opacity: 0.8;
+      }
+      #warning {
+        margin-top: 20px;
+        font-size: 1.2em;
+        color: #ff4444; /* Red for warnings */
+        font-weight: bold;
+        display: none; /* Hidden by default */
+      }
     </style>
-</head>
-<body>
-    <h1>RealSense Camera with Roboflow Detections</h1>
-    <img src="{{ url_for('video_feed') }}" alt="Video Feed">
-</body>
+    <script>
+      // Fetch detection data and update warning
+      function updateWarnings() {
+        fetch("/detections")
+          .then((response) => response.json())
+          .then((data) => {
+            const warningDiv = document.getElementById("warning");
+            const noHelmet = data.detections.some(
+              (d) => d.class === "no-helmet"
+            );
+            const noVest = data.detections.some((d) => d.class === "no-vest");
+
+            if (noHelmet || noVest) {
+              let warningText = "WARNING: ";
+              if (noHelmet) warningText += "No helmet detected. ";
+              if (noVest) warningText += "No vest detected.";
+              warningDiv.textContent = warningText;
+              warningDiv.style.display = "block";
+            } else {
+              warningDiv.style.display = "none";
+            }
+          })
+          .catch((error) => console.error("Error fetching detections:", error));
+      }
+
+      // Poll for updates every second
+      setInterval(updateWarnings, 1000);
+      window.onload = updateWarnings; // Initial check
+    </script>
+  </head>
+  <body>
+    <h1>AMIC Construction PPE Detection</h1>
+    <div class="video-container">
+      <img src="{{ url_for('video_feed') }}" alt="Video Feed" />
+      <img
+        src="/static/joint_logo.png"
+        class="logo"
+        alt="AMIC Logo"
+      />
+    </div>
+    <div id="warning"></div>
+  </body>
 </html>
