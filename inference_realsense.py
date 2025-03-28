@@ -5,7 +5,7 @@ from utils import app
 # Configure RealSense pipeline
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)  # RGB stream at 640x480, 30 FPS
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 
 # Start streaming
 pipeline.start(config)
@@ -19,7 +19,6 @@ def get_realsense_frame():
     frame = np.asanyarray(color_frame.get_data())
     return True, frame
 
-# Register the frame-getting function with the Flask app
 app.config['GET_FRAME_FUNC'] = get_realsense_frame
 
 if __name__ == "__main__":

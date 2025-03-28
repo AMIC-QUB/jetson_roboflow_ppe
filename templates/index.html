@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>AMIC Construction PPE Detection</title>
+    <title>ROI Person Detection</title>
     <style>
       body {
         display: flex;
@@ -10,78 +10,265 @@
         align-items: center;
         min-height: 100vh;
         margin: 0;
-        background-color: #1a1a1a; /* Near-black background */
-        color: #ffffff; /* White text for contrast */
+        background-color: #1a1a1a;
+        color: #ffffff;
         font-family: Arial, sans-serif;
       }
       h1 {
         margin: 20px 0;
         font-size: 2em;
       }
+      .container {
+        display: flex;
+        width: 100%;
+        max-width: 1200px;
+        justify-content: space-between;
+      }
       .video-container {
         position: relative;
-        max-width: 100%;
+        max-width: 70%;
       }
-      img {
+      #video-feed {
         max-width: 100%;
         height: auto;
         border: 2px solid #ffffff;
+        -webkit-user-drag: none;
+        user-drag: none;
+        user-select: none;
+      }
+      #canvas-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: all;
       }
       .logo {
         position: absolute;
         bottom: 10px;
         right: 10px;
-        width: 100px; /* Adjust size as needed */
+        width: 100px;
         opacity: 0.8;
       }
       #warning {
         margin-top: 20px;
         font-size: 1.2em;
-        color: #ff4444; /* Red for warnings */
+        color: #ff4444;
         font-weight: bold;
-        display: none; /* Hidden by default */
+        display: none;
+      }
+      #roi-instructions {
+        margin-top: 10px;
+        font-size: 1em;
+        color: #cccccc;
+      }
+      .roi-panel {
+        max-width: 25%;
+        padding: 10px;
+        background-color: #333;
+        border-radius: 5px;
+      }
+      .roi-item {
+        margin: 10px 0;
+        padding: 5px;
+        background-color: #444;
+        border-radius: 3px;
+      }
+      .roi-item input {
+        width: 70%;
+        margin-right: 5px;
+        background-color: #555;
+        color: #fff;
+        border: 1px solid #666;
+        padding: 2px;
+      }
+      .roi-item button {
+        background-color: #ff4444;
+        border: none;
+        padding: 2px 5px;
+        color: white;
+        cursor: pointer;
+      }
+      .detection-list {
+        margin-top: 10px;
+        max-height: 200px;
+        overflow-y: auto;
+        font-size: 0.9em;
       }
     </style>
     <script>
-      // Fetch detection data and update warning
-      function updateWarnings() {
-        fetch("/detections")
-          .then((response) => response.json())
-          .then((data) => {
-            const warningDiv = document.getElementById("warning");
-            const noHelmet = data.detections.some(
-              (d) => d.class === "no-helmet"
-            );
-            const noVest = data.detections.some((d) => d.class === "no-vest");
+      let drawing = false;
+      let startX, startY;
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
 
-            if (noHelmet || noVest) {
-              let warningText = "WARNING: ";
-              if (noHelmet) warningText += "No helmet detected. ";
-              if (noVest) warningText += "No vest detected.";
-              warningDiv.textContent = warningText;
+      function setupCanvas() {
+        const video = document.getElementById("video-feed");
+        canvas.width = video.width;
+        canvas.height = video.height;
+        document.querySelector(".video-container").appendChild(canvas);
+        canvas.id = "canvas-overlay";
+      }
+
+      function updateUI() {
+        console.log("updateUI called at", new Date().toISOString());
+        fetch("/detections")
+          .then((response) => {
+            if (!response.ok)
+              throw new Error(`HTTP error! status: ${response.status}`);
+            return response.json();
+          })
+          .then((data) => {
+            console.log("Detections data:", JSON.stringify(data, null, 2));
+            const warningDiv = document.getElementById("warning");
+            const roiPanel = document.getElementById("roi-panel");
+            let personsInROI = [];
+            data.detections.forEach((d) => {
+              if (d.in_roi.length > 0) {
+                personsInROI.push(...d.in_roi);
+              }
+            });
+
+            if (personsInROI.length > 0) {
+              warningDiv.textContent = personsInROI
+                .map((p) => `WARNING: Person in ${p.name} at ${p.time}`)
+                .join(" | ");
               warningDiv.style.display = "block";
+              console.log("Warnings triggered:", personsInROI);
             } else {
               warningDiv.style.display = "none";
+              console.log("No persons in ROI detected");
             }
+
+            roiPanel.innerHTML = "";
+            data.rois.forEach((roi) => {
+              const div = document.createElement("div");
+              div.className = "roi-item";
+              div.innerHTML = `
+                            <input type="text" value="${roi.name}" data-id="${
+                roi.id
+              }">
+                            <button onclick="deleteROI(${
+                              roi.id
+                            })">Delete</button>
+                            <div class="detection-list">${roi.detections
+                              .map((d) => `<div>${d.time}</div>`)
+                              .join("")}</div>
+                        `;
+              div.style.borderLeft = `5px solid rgb(${roi.color[2]}, ${roi.color[1]}, ${roi.color[0]})`;
+              roiPanel.appendChild(div);
+            });
           })
           .catch((error) => console.error("Error fetching detections:", error));
       }
 
-      // Poll for updates every second
-      setInterval(updateWarnings, 1000);
-      window.onload = updateWarnings; // Initial check
+      function startDrawing(event) {
+        const rect = canvas.getBoundingClientRect();
+        startX = event.clientX - rect.left;
+        startY = event.clientY - rect.top;
+        drawing = true;
+        canvas.addEventListener("mousemove", drawPreview);
+      }
+
+      function drawPreview(event) {
+        if (!drawing) return;
+        const rect = canvas.getBoundingClientRect();
+        const currentX = event.clientX - rect.left;
+        const currentY = event.clientY - rect.top;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "green";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+      }
+
+      function stopDrawing(event) {
+        if (drawing) {
+          const rect = canvas.getBoundingClientRect();
+          const endX = event.clientX - rect.left;
+          const endY = event.clientY - rect.top;
+          drawing = false;
+          canvas.removeEventListener("mousemove", drawPreview);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          fetch("/add_roi", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              start: { x: startX, y: startY },
+              end: { x: endX, y: endY },
+            }),
+          })
+            .then((response) => response.json())
+            .then(() => updateUI())
+            .catch((error) => console.error("Error adding ROI:", error));
+        }
+      }
+
+      function updateROIName(id, name) {
+        fetch("/update_roi_name", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, name: name }),
+        })
+          .then((response) => response.json())
+          .then(() => updateUI())
+          .catch((error) => console.error("Error updating ROI name:", error));
+      }
+
+      function deleteROI(id) {
+        fetch("/delete_roi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id }),
+        })
+          .then((response) => response.json())
+          .then(() => updateUI())
+          .catch((error) => console.error("Error deleting ROI:", error));
+      }
+
+      window.onload = () => {
+        setupCanvas();
+        canvas.addEventListener("mousedown", startDrawing);
+        canvas.addEventListener("mouseup", stopDrawing);
+
+        document
+          .getElementById("roi-panel")
+          .addEventListener("change", (event) => {
+            if (event.target.tagName === "INPUT") {
+              const id = parseInt(event.target.getAttribute("data-id"));
+              const name = event.target.value;
+              updateROIName(id, name);
+            }
+          });
+
+        // Run updateUI immediately and then every second
+        updateUI();
+        setInterval(() => {
+          updateUI();
+        }, 1000);
+      };
     </script>
   </head>
   <body>
-    <h1>AMIC Construction PPE Detection</h1>
-    <div class="video-container">
-      <img src="{{ url_for('video_feed') }}" alt="Video Feed" />
-      <img
-        src="/static/joint_logo.png"
-        class="logo"
-        alt="AMIC Logo"
-      />
+    <h1>ROI Person Detection</h1>
+    <div class="container">
+      <div class="video-container">
+        <img
+          id="video-feed"
+          src="{{ url_for('video_feed') }}"
+          alt="Video Feed"
+        />
+        <img
+          src="https://via.placeholder.com/100?text=Logo"
+          class="logo"
+          alt="Logo"
+        />
+      </div>
+      <div class="roi-panel" id="roi-panel"></div>
     </div>
     <div id="warning"></div>
+    <div id="roi-instructions">
+      Click and drag on the video feed to draw a rectangular region of interest.
+    </div>
   </body>
 </html>

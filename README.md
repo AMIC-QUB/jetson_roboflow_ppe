@@ -16,12 +16,12 @@ docker run -d --runtime nvidia --network host roboflow/roboflow-inference-server
 
     For USB Camera (default):
 ```bash
-docker run --runtime nvidia --device /dev/video0:/dev/video0 --network host jetson-roboflow-camera-web
+docker run --runtime nvidia --device /dev/video0:/dev/video0 --network host jetson-roboflow-area_detector-web
 ```
     For RealSense Camera:
 
 ```bash
-docker run --runtime nvidia --privileged --network host -e CAMERA_TYPE=realsense jetson-roboflow-camera-web
+docker run --runtime nvidia --privileged --network host -e CAMERA_TYPE=realsense jetson-roboflow-area_detector-web
 ```
 
 Go to 
@@ -41,10 +41,10 @@ docker run -d --gpus all --network host roboflow/roboflow-inference-server-gpu:l
 
 For USB Camera (default):
 ```bash
-docker run --gpus all --device /dev/video0:/dev/video0 --network host roboflow-camera-web
+docker run --gpus all --device /dev/video0:/dev/video0 --network host roboflow-area_detector-web
 ```
 For RealSense Camera:
 
 ```bash
-docker run --gpus all --privileged --network host -e CAMERA_TYPE=realsense roboflow-camera-web
+docker run --gpus all --privileged --network host -e CAMERA_TYPE=realsense roboflow-area_detector-web
 ```
