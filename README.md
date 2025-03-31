@@ -41,7 +41,10 @@ docker run -d --gpus all --network host roboflow/roboflow-inference-server-gpu:l
 
 For USB Camera (default):
 ```bash
-docker run --gpus all --device /dev/video0:/dev/video0 --network host roboflow-area_detector-web
+docker run -it --gpus all --privileged --device /dev/video4:/dev/video4 --network host \
+    -e CAMERA_TYPE=usb \
+    -e VIDEO_DEVICE_INDEX=4 \
+    roboflow-roi-web    
 ```
 For RealSense Camera:
 

@@ -5,6 +5,7 @@ import base64
 from flask import Flask, Response, render_template, jsonify, request
 from typing import Callable, Generator
 from datetime import datetime
+import inspect
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -40,10 +41,26 @@ def box_in_rectangle(box: tuple[int, int, int, int], rect: tuple[tuple[int, int]
 
 def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> Generator[bytes, None, None]:
     """Generator function to yield video frames with ROIs and person detections."""
-    global latest_detections, rois
+    global latest_detections
+    # Check if get_frame is callable
+    if not inspect.isfunction(get_frame) and not inspect.ismethod(get_frame):
+        raise TypeError(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
+    
+    frame_source = get_frame()  # Initialize the frame source
     while True:
         try:
-            ret, frame = get_frame()
+            # Handle generator case
+            if inspect.isgenerator(frame_source):
+                result = next(frame_source)
+            else:
+                result = frame_source()
+            
+            # Ensure result is a 2-tuple
+            if not isinstance(result, tuple) or len(result) != 2:
+                print(f"Error: get_frame() must return a 2-tuple (ret, frame), got {result}")
+                break
+            ret, frame = result
+            
             if not ret or frame is None:
                 print("Error: Could not retrieve frame.")
                 break
@@ -58,6 +75,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 data=jpg_as_text,
                 headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
+
 
             # Process response and draw detections
             if response.status_code == 200:
