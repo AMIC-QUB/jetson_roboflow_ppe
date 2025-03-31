@@ -274,7 +274,7 @@
           <h2>Weekly</h2>
           <p>{{ total_weekly_sum }}</p>
         </div>
-
+      
         <h3>Detection Details</h3>
         {% for roi in detections_by_roi %}
         <div class="roi-section">
@@ -285,11 +285,12 @@
           <div id="roi-{{ roi.roi_id }}" class="roi-content" style="display: none;">
             <table>
               <thead>
-                <tr><th>Time</th><th>Image</th></tr>
+                <tr><th>Camera</th><th>Time</th><th>Image</th></tr>
               </thead>
               <tbody>
                 {% for detection in roi.detections %}
                 <tr>
+                  <td>{{ detection.camera_id }}</td>
                   <td>{{ detection.time }}</td>
                   <td>
                     {% if detection.image %}

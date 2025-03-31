@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import requests
 import base64
-from flask import Flask, Response, render_template, jsonify, request,send_from_directory
+from flask import Flask, Response, render_template, jsonify, request,send_from_directory, stream_with_context
 from typing import Callable, Generator
 from datetime import datetime, timedelta
 import inspect
@@ -13,8 +13,9 @@ import os
 import logging
 
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='/app/static', static_url_path='/static')
 logging.basicConfig(level=logging.DEBUG)
+
 
 ROBOFLOW_API_KEY = "ENZzcL3rs3i1hPuQqXSW"
 ROBOFLOW_MODEL_URL = "http://roboflow-inference:9001/construction-safety-gsnvb/1"
@@ -52,6 +53,7 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS detections
                  (id SERIAL PRIMARY KEY,
+                  camera_id TEXT,
                   roi_id INTEGER,
                   roi_name TEXT,
                   detection_time TIMESTAMP,
@@ -64,6 +66,7 @@ def init_db():
                   enabled BOOLEAN DEFAULT TRUE)''')
     conn.commit()
     conn.close()
+
 
 def load_rois():
     global rois, roi_id_counter
@@ -102,13 +105,14 @@ def save_roi(roi):
     conn.commit()
     conn.close()
 
-def log_detection(roi_id, roi_name, detection_time, image_path):
+def log_detection(camera_id, roi_id, roi_name, detection_time, image_path):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO detections (roi_id, roi_name, detection_time, image_path) VALUES (%s, %s, %s, %s)",
-              (roi_id, roi_name, detection_time, image_path))
+    c.execute("INSERT INTO detections (camera_id, roi_id, roi_name, detection_time, image_path) VALUES (%s, %s, %s, %s, %s)",
+              (camera_id, roi_id, roi_name, detection_time, image_path))
     conn.commit()
     conn.close()
+
 
 def publish_mqtt(roi_id, roi_name, detection_time):
     global mqtt_client, mqtt_connected
@@ -130,10 +134,12 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
     if not inspect.isfunction(get_frame) and not inspect.ismethod(get_frame):
         raise TypeError(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
     
+    # Get CAMERA_ID from environment
+    camera_id = os.getenv("CAMERA_ID", "unknown_camera")
+
     frame_source = get_frame()
     while True:
         try:
-            # Get frame
             if inspect.isgenerator(frame_source):
                 result = next(frame_source)
             else:
@@ -148,11 +154,9 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 app.logger.error("Error: Could not retrieve frame from camera.")
                 continue
 
-            # Encode frame for Roboflow
             _, buffer = cv2.imencode('.jpg', frame)
             jpg_as_text = base64.b64encode(buffer).decode('utf-8')
 
-            # Send to Roboflow
             try:
                 response = requests.post(
                     f"{ROBOFLOW_MODEL_URL}?api_key={ROBOFLOW_API_KEY}",
@@ -163,7 +167,6 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 app.logger.error(f"Error contacting Roboflow API: {str(e)}")
-                # Draw error message on the frame (we'll keep this as a fallback)
                 cv2.putText(frame, "Roboflow API Error", (50, 50), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 ret, buffer = cv2.imencode('.jpg', frame)
@@ -206,7 +209,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                                         app.logger.error(f"Error saving detection image: {str(e)}")
                                         image_path = ""
                                     roi["detections"].append({"time": db_time_str})
-                                    log_detection(roi["id"], roi["name"], db_time_str, image_path)
+                                    log_detection(camera_id, roi["id"], roi["name"], db_time_str, image_path)
                                     publish_mqtt(roi["id"], roi["name"], db_time_str)
                                     print(f"Detection logged for {roi['name']} at {db_time_str}")
                                 break
@@ -214,7 +217,6 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                         app.logger.error(f"Error processing prediction: {pred}, {e}")
                         continue
 
-            # Send the raw frame without drawing
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
                 app.logger.error("Error encoding frame to JPEG")
@@ -235,7 +237,6 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
 # ... (rest of the file unchanged)
 @app.route('/')
 def index():
@@ -245,10 +246,29 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    return Response(generate_frames(app.config['GET_FRAME_FUNC']), 
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/detections')
+    jetson_host = os.getenv("JETSON_HOST", "http://localhost:5000")
+    local_inference_host = os.getenv("LOCAL_INFERENCE_HOST", "http://localhost:5001")
+    
+    # Try Jetson first
+    try:
+        jetson_url = f"{jetson_host}/video_feed"
+        req = requests.get(jetson_url, stream=True, timeout=5)
+        req.raise_for_status()
+        return Response(stream_with_context(req.iter_content(chunk_size=1024)),
+                        content_type=req.headers['content-type'])
+    except requests.exceptions.RequestException as e:
+        app.logger.warning(f"Error proxying video feed from Jetson ({jetson_host}): {str(e)}")
+    
+    # Fall back to local inference service
+    try:
+        local_url = f"{local_inference_host}/video_feed"
+        req = requests.get(local_url, stream=True, timeout=5)
+        req.raise_for_status()
+        return Response(stream_with_context(req.iter_content(chunk_size=1024)),
+                        content_type=req.headers['content-type'])
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Error proxying video feed from local inference ({local_inference_host}): {str(e)}")
+        return "Error: Could not connect to any video feed source", 503@app.route('/detections')
 def get_detections():
     load_rois()
     detections_with_roi = []
@@ -350,13 +370,12 @@ def dashboard():
         conn = get_db_connection()
         c = conn.cursor()
         app.logger.debug("Executing SQL query")
-        # Check if image_path exists, fall back if not
         c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'detections' AND column_name = 'image_path'")
         has_image_path = c.fetchone() is not None
         if has_image_path:
-            c.execute("SELECT roi_id, roi_name, detection_time, image_path FROM detections ORDER BY detection_time DESC")
+            c.execute("SELECT camera_id, roi_id, roi_name, detection_time, image_path FROM detections ORDER BY detection_time DESC")
         else:
-            c.execute("SELECT roi_id, roi_name, detection_time, NULL AS image_path FROM detections ORDER BY detection_time DESC")
+            c.execute("SELECT camera_id, roi_id, roi_name, detection_time, NULL AS image_path FROM detections ORDER BY detection_time DESC")
         rows = c.fetchall()
         app.logger.debug(f"Fetched {len(rows)} rows: {rows}")
         conn.close()
@@ -365,15 +384,16 @@ def dashboard():
         roi_groups = {}
         all_roi_names = set()
         for row in rows:
-            roi_id = row[0]
-            roi_name = row[1] if row[1] is not None else f"Unnamed ROI {roi_id}"
-            detection_time = row[2]
-            image_path = row[3]  # May be None
+            camera_id = row[0]
+            roi_id = row[1]
+            roi_name = row[2] if row[2] is not None else f"Unnamed ROI {roi_id}"
+            detection_time = row[3]
+            image_path = row[4]
             all_roi_names.add(roi_name)
             if roi_id not in roi_groups:
                 roi_groups[roi_id] = {"name": roi_name, "detections": []}
                 app.logger.debug(f"Initialized roi_groups[{roi_id}] = {{'name': '{roi_name}', 'detections': []}}")
-            roi_groups[roi_id]["detections"].append({"time": detection_time, "image": image_path})
+            roi_groups[roi_id]["detections"].append({"time": detection_time, "image": image_path, "camera_id": camera_id})
 
         # Filter by selected ROIs
         selected_rois = request.form.getlist('rois') if request.method == 'POST' else request.args.getlist('rois')
@@ -387,11 +407,12 @@ def dashboard():
         # Prepare data for template
         detections_by_roi = [
             {"roi_id": roi_id, "roi_name": group["name"], 
-             "detections": [{"time": d["time"].strftime("%Y-%m-%d %H:%M:%S"), "image": d["image"] or ""} for d in group["detections"]]}
+             "detections": [{"time": d["time"].strftime("%Y-%m-%d %H:%M:%S"), "image": d["image"] or "", "camera_id": d["camera_id"]} for d in group["detections"]]}
             for roi_id, group in filtered_roi_groups.items()
         ]
         app.logger.debug(f"Prepared detections_by_roi: {detections_by_roi}")
 
+        # ... (rest of the dashboard route unchanged)
         # Detection counts per ROI for bar chart
         chart_labels = [entry["roi_name"] for entry in detections_by_roi]
         chart_data = [len(entry["detections"]) for entry in detections_by_roi]

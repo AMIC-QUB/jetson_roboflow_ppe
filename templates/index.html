@@ -482,8 +482,12 @@
     <h1>ROI Person Detection</h1>
     <div class="container">
       <div class="video-container">
-        <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed" />
-        <img src="https://via.placeholder.com/100?text=Logo" class="logo" alt="Logo" />
+        <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed" 
+             onerror="this.style.display='none'; document.getElementById('video-error').style.display='block';">
+        <div id="video-error" style="display: none; color: #ff4444; font-weight: bold;">
+          Unable to load video feed from Jetson. Please ensure the inference service is running.
+        </div>
+        <img src="{{ url_for('static', filename='joint_logo.png') }}" class="logo" alt="Logo" />
       </div>
       <div class="roi-panel" id="roi-panel">
         {% for roi in rois %}
