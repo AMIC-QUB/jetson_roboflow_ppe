@@ -141,8 +141,10 @@
       let drawing = false;
       let startX, startY;
       let canvas, ctx;
-      let isEditing = false;  // Track if an input is being edited
-      let updateInterval;     // Store the interval ID
+      let isEditing = false;
+      let updateInterval;
+      let rois = [];
+      let detections = [];
 
       function setupCanvas() {
         const video = document.getElementById("video-feed");
@@ -157,10 +159,89 @@
         document.querySelector(".video-container").appendChild(canvas);
         canvas.id = "canvas-overlay";
         console.log("Canvas set up:", canvas.width, "x", canvas.height);
+
+        // Adjust canvas size when video loads or window resizes
+        video.addEventListener("loadedmetadata", adjustCanvasSize);
+        window.addEventListener("resize", adjustCanvasSize);
+      }
+
+      function adjustCanvasSize() {
+        const video = document.getElementById("video-feed");
+        canvas.width = video.clientWidth;
+        canvas.height = video.clientHeight;
+        drawVisualizations();
+      }
+
+      function drawDashedLine(ctx, x1, y1, x2, y2, color, dashLength = 5) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([dashLength, dashLength]);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]); // Reset dash pattern
+      }
+
+      function drawVisualizations() {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw ROIs
+        rois.forEach(roi => {
+          if (!roi.enabled) return;
+          const [x1, y1] = roi.coords[0];
+          const [x2, y2] = roi.coords[1];
+          const color = `rgb(${roi.color[2]}, ${roi.color[1]}, ${roi.color[0]})`;
+
+          // Draw ROI outline (dashed)
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = 0.4;
+          drawDashedLine(ctx, x1, y1, x2, y1, color); // Top
+          drawDashedLine(ctx, x2, y1, x2, y2, color); // Right
+          drawDashedLine(ctx, x2, y2, x1, y2, color); // Bottom
+          drawDashedLine(ctx, x1, y2, x1, y1, color); // Left
+          ctx.globalAlpha = 1.0;
+
+          // Draw ROI label inside top-left corner
+          ctx.font = "16px Arial";
+          ctx.fillStyle = "black";
+          ctx.fillText(roi.name, x1 + 5, y1 + 20);
+          ctx.fillStyle = color;
+          ctx.fillText(roi.name, x1 + 5, y1 + 20);
+        });
+
+        // Draw detections
+        detections.forEach(d => {
+          const [x1, y1, x2, y2] = d.box;
+          const inRoi = d.in_roi.length > 0;
+          const color = inRoi ? "red" : "green";
+
+          // Draw detection outline (dashed)
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = 0.6;
+          drawDashedLine(ctx, x1, y1, x2, y1, color); // Top
+          drawDashedLine(ctx, x2, y1, x2, y2, color); // Right
+          drawDashedLine(ctx, x2, y2, x1, y2, color); // Bottom
+          drawDashedLine(ctx, x1, y2, x1, y1, color); // Left
+          ctx.globalAlpha = 1.0;
+
+          // Draw detection label
+          const label = `${d.class} (${d.confidence.toFixed(2)})`;
+          ctx.font = "16px Arial";
+          ctx.fillStyle = "black";
+          ctx.fillText(label, x1, y1 - 10);
+          ctx.fillStyle = color;
+          ctx.fillText(label, x1, y1 - 10);
+        });
       }
 
       function updateUI() {
-        if (isEditing) return;  // Skip UI update if editing
+        if (isEditing) return;
         console.log("updateUI called at", new Date().toISOString());
         fetch("/detections")
           .then((response) => {
@@ -171,15 +252,22 @@
           .then((data) => {
             console.log("Detections data:", JSON.stringify(data, null, 2));
             const warningDiv = document.getElementById("warning");
-            const roiPanel = document.getElementById("roi-panel");
             let personsInROI = [];
-            data.detections.forEach((d) => {
-              if (d.in_roi.length > 0) {
-                personsInROI.push(...d.in_roi);
-              }
-            });
+            detections = data.detections.map(d => ({
+              box: [
+                d.x - d.width / 2,
+                d.y - d.height / 2,
+                d.x + d.width / 2,
+                d.y + d.height / 2
+              ],
+              class: d.class,
+              confidence: d.confidence,
+              in_roi: d.in_roi
+            }));
+            rois = data.rois;
 
-            if (personsInROI.length > 0) {
+            if (detections.some(d => d.in_roi.length > 0)) {
+              personsInROI = detections.flatMap(d => d.in_roi);
               warningDiv.textContent = personsInROI
                 .map((p) => `WARNING: Person in ${p.name} at ${p.time}`)
                 .join(" | ");
@@ -190,11 +278,11 @@
               console.log("No persons in ROI detected");
             }
 
-            // Store the currently focused element
             const focusedElement = document.activeElement;
             const focusedId = focusedElement && focusedElement.tagName === "INPUT" && focusedElement.type === "text" ? focusedElement.getAttribute("data-id") : null;
             const focusedValue = focusedElement && focusedElement.tagName === "INPUT" && focusedElement.type === "text" ? focusedElement.value : null;
 
+            const roiPanel = document.getElementById("roi-panel");
             roiPanel.innerHTML = "";
             data.rois.forEach((roi) => {
               const div = document.createElement("div");
@@ -211,7 +299,6 @@
               roiPanel.appendChild(div);
             });
 
-            // Restore focus if an input was being edited
             if (focusedId) {
               const input = document.querySelector(`input[data-id="${focusedId}"]`);
               if (input) {
@@ -219,6 +306,9 @@
                 input.value = focusedValue;
               }
             }
+
+            // Redraw visualizations after updating ROIs and detections
+            drawVisualizations();
           })
           .catch((error) => console.error("Error fetching detections:", error));
       }
@@ -242,6 +332,7 @@
         const currentY = event.clientY - rect.top;
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawVisualizations(); // Redraw existing ROIs and detections
         ctx.strokeStyle = "green";
         ctx.lineWidth = 2;
         ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
@@ -255,6 +346,7 @@
         drawing = false;
         canvas.removeEventListener("mousemove", drawPreview);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawVisualizations(); // Redraw existing ROIs and detections
 
         fetch("/add_roi", {
           method: "POST",
@@ -277,7 +369,7 @@
         })
           .then((response) => response.json())
           .then(() => {
-            isEditing = false;  // Allow UI updates after saving
+            isEditing = false;
             updateUI();
           })
           .catch((error) => console.error("Error updating ROI name:", error));

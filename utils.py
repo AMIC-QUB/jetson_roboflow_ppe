@@ -163,6 +163,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 app.logger.error(f"Error contacting Roboflow API: {str(e)}")
+                # Draw error message on the frame (we'll keep this as a fallback)
                 cv2.putText(frame, "Roboflow API Error", (50, 50), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 ret, buffer = cv2.imencode('.jpg', frame)
@@ -177,21 +178,6 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                                       if pred.get("confidence", 0.0) >= CONFIDENCE_THRESHOLD and pred.get("class") == "person"]
                 latest_detections = filtered_predictions
 
-                # Draw ROIs with a softer outline
-                for roi in [r for r in rois if r["enabled"]]:
-                    # Use a semi-transparent color for the ROI outline
-                    overlay = frame.copy()
-                    cv2.rectangle(overlay, roi["coords"][0], roi["coords"][1], roi["color"], 1)
-                    alpha = 0.4
-                    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-                    # Draw ROI name inside the top-left corner with a shadow
-                    label_x = roi["coords"][0][0] + 5  # 5 pixels inside the left edge
-                    label_y = roi["coords"][0][1] + 20  # 20 pixels down from the top edge (adjust for font size)
-                    cv2.putText(frame, roi["name"], (label_x, label_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)  # Shadow
-                    cv2.putText(frame, roi["name"], (label_x, label_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi["color"], 1)  # Text
-
                 current_time = datetime.now()
                 filename_time_str = current_time.strftime("%Y-%m-%d_%H-%M-%S")
                 db_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -201,12 +187,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                         y = int(pred.get("y", 0))
                         w = int(pred.get("width", 0))
                         h = int(pred.get("height", 0))
-                        label = pred.get("class", "person")
-                        confidence = pred.get("confidence", 0.0)
-
-                        pt1 = (x - w // 2, y - h // 2)
-                        pt2 = (x + w // 2, y + h // 2)
-                        box = (pt1[0], pt1[1], pt2[0], pt2[1])
+                        box = (x - w // 2, y - h // 2, x + w // 2, y + h // 2)
 
                         in_roi = False
                         for roi in [r for r in rois if r["enabled"]]:
@@ -229,27 +210,11 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                                     publish_mqtt(roi["id"], roi["name"], db_time_str)
                                     print(f"Detection logged for {roi['name']} at {db_time_str}")
                                 break
-                        
-                        overlay = frame.copy()
-                        color = RED if in_roi else GREEN
-                        for i in range(pt1[0], pt2[0], 10):
-                            cv2.line(overlay, (i, pt1[1]), (min(i + 5, pt2[0]), pt1[1]), color, 1)
-                            cv2.line(overlay, (i, pt2[1]), (min(i + 5, pt2[0]), pt2[1]), color, 1)
-                        for i in range(pt1[1], pt2[1], 10):
-                            cv2.line(overlay, (pt1[0], i), (pt1[0], min(i + 5, pt2[1])), color, 1)
-                            cv2.line(overlay, (pt2[0], i), (pt2[0], min(i + 5, pt2[1])), color, 1)
-                        alpha = 0.6
-                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
-                        label_text = f"{label} ({confidence:.2f})"
-                        cv2.putText(frame, label_text, (x, y - 10), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
-                        cv2.putText(frame, label_text, (x, y - 10), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 1)
                     except (ValueError, TypeError) as e:
                         app.logger.error(f"Error processing prediction: {pred}, {e}")
                         continue
 
+            # Send the raw frame without drawing
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
                 app.logger.error("Error encoding frame to JPEG")
