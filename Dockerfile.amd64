@@ -26,48 +26,9 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     v4l-utils \
     wget \
+    libpq-dev \ 
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Stage for building librealsense from source (adapted from Intel's Dockerfile)
-FROM runtime AS builder
-RUN apt-get update && apt-get install -y \
-    git \
-    libssl-dev \
-    libusb-1.0-0-dev \
-    pkg-config \
-    libgtk-3-dev \
-    libglfw3-dev \
-    libgl1-mesa-dev \
-    libglu1-mesa-dev \
-    at \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Clone and build librealsense
-WORKDIR /usr/src
-RUN git clone https://github.com/IntelRealSense/librealsense.git \
-    && cd librealsense \
-    && mkdir build && cd build \
-    && cmake \
-    -DBUILD_EXAMPLES=false \
-    -DBUILD_TOOLS=true \
-    -DBUILD_UNIT_TESTS=false \
-    -DBUILD_WITH_CUDA=false \
-    -DCMAKE_BUILD_TYPE=Release .. \
-    && make -j$(nproc) \
-    && make install
-
-# Final runtime image
-FROM runtime
-
-# Copy libraries and headers from builder stage
-COPY --from=builder /usr/local /usr/local
-COPY --from=builder /usr/lib /usr/lib
-
-# Copy binaries from builder stage (e.g., rs-enumerate-devices, rs-fw-update)
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Update library cache
-RUN ldconfig
 
 # Upgrade pip and install Python dependencies
 RUN pip3 install --upgrade pip
@@ -76,17 +37,21 @@ RUN pip3 install \
     requests \
     numpy \
     pyrealsense2 \
-    flask
+    flask \
+    paho-mqtt \
+    psycopg2-binary
 
 # Set working directory
 WORKDIR /app
+RUN mkdir -p /app/detections && chmod -R 777 /app/detections
 
 # Copy inference scripts and HTML template
 COPY utils.py /app/utils.py
 COPY inference_usb.py /app/inference_usb.py
 COPY inference_realsense.py /app/inference_realsense.py
-COPY templates/index.html /app/templates/index.html
+COPY templates/ /app/templates/
 COPY static /app/static
+
 # Expose ports: 9001 for Roboflow inference, 5000 for Flask web server
 EXPOSE 9001 5000
 

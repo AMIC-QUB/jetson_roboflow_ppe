@@ -23,10 +23,12 @@
         width: 100%;
         max-width: 1200px;
         justify-content: space-between;
+        gap: 20px;
       }
       .video-container {
         position: relative;
         max-width: 70%;
+        flex: 1;
       }
       #video-feed {
         max-width: 100%;
@@ -63,9 +65,11 @@
       }
       .roi-panel {
         max-width: 25%;
+        flex: 0 0 25%;
         padding: 10px;
         background-color: #333;
         border-radius: 5px;
+        overflow-y: auto;
       }
       .roi-item {
         margin: 10px 0;
@@ -73,13 +77,16 @@
         background-color: #444;
         border-radius: 3px;
       }
-      .roi-item input {
-        width: 70%;
+      .roi-item input[type="text"] {
+        width: 60%;
         margin-right: 5px;
         background-color: #555;
         color: #fff;
         border: 1px solid #666;
         padding: 2px;
+      }
+      .roi-item input[type="checkbox"] {
+        margin-left: 5px;
       }
       .roi-item button {
         background-color: #ff4444;
@@ -94,22 +101,66 @@
         overflow-y: auto;
         font-size: 0.9em;
       }
+      .dashboard-link, .mqtt-section, .reset-section {
+        margin-top: 10px;
+        font-size: 1em;
+      }
+      .dashboard-link a {
+        color: #00ccff;
+        text-decoration: none;
+      }
+      .dashboard-link a:hover {
+        text-decoration: underline;
+      }
+      .mqtt-section input {
+        background-color: #555;
+        color: #fff;
+        border: 1px solid #666;
+        padding: 5px;
+        width: 200px;
+      }
+      .mqtt-section button, .reset-button {
+        background-color: #00ccff;
+        border: none;
+        padding: 5px 10px;
+        color: white;
+        cursor: pointer;
+        margin-left: 5px;
+        border-radius: 4px;
+      }
+      .reset-button {
+        background-color: #ff4444;
+      }
+      #mqtt-status {
+        margin-top: 5px;
+        font-size: 0.9em;
+        color: #cccccc;
+      }
     </style>
     <script>
       let drawing = false;
       let startX, startY;
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+      let canvas, ctx;
+      let isEditing = false;  // Track if an input is being edited
+      let updateInterval;     // Store the interval ID
 
       function setupCanvas() {
         const video = document.getElementById("video-feed");
-        canvas.width = video.width;
-        canvas.height = video.height;
+        if (!video) {
+          console.error("Video element not found");
+          return;
+        }
+        canvas = document.createElement("canvas");
+        canvas.width = video.clientWidth;
+        canvas.height = video.clientHeight;
+        ctx = canvas.getContext("2d");
         document.querySelector(".video-container").appendChild(canvas);
         canvas.id = "canvas-overlay";
+        console.log("Canvas set up:", canvas.width, "x", canvas.height);
       }
 
       function updateUI() {
+        if (isEditing) return;  // Skip UI update if editing
         console.log("updateUI called at", new Date().toISOString());
         fetch("/detections")
           .then((response) => {
@@ -139,29 +190,44 @@
               console.log("No persons in ROI detected");
             }
 
+            // Store the currently focused element
+            const focusedElement = document.activeElement;
+            const focusedId = focusedElement && focusedElement.tagName === "INPUT" && focusedElement.type === "text" ? focusedElement.getAttribute("data-id") : null;
+            const focusedValue = focusedElement && focusedElement.tagName === "INPUT" && focusedElement.type === "text" ? focusedElement.value : null;
+
             roiPanel.innerHTML = "";
             data.rois.forEach((roi) => {
               const div = document.createElement("div");
               div.className = "roi-item";
-              div.innerHTML = `
-                            <input type="text" value="${roi.name}" data-id="${
-                roi.id
-              }">
-                            <button onclick="deleteROI(${
-                              roi.id
-                            })">Delete</button>
-                            <div class="detection-list">${roi.detections
-                              .map((d) => `<div>${d.time}</div>`)
-                              .join("")}</div>
-                        `;
               div.style.borderLeft = `5px solid rgb(${roi.color[2]}, ${roi.color[1]}, ${roi.color[0]})`;
+              div.innerHTML = `
+                <input type="text" value="${roi.name}" data-id="${roi.id}">
+                <input type="checkbox" ${roi.enabled ? 'checked' : ''} onchange="toggleROI(${roi.id}, this.checked)">
+                <button onclick="deleteROI(${roi.id})">Delete</button>
+                <div class="detection-list">${roi.detections
+                  .map((d) => `<div>${d.time}</div>`)
+                  .join("")}</div>
+              `;
               roiPanel.appendChild(div);
             });
+
+            // Restore focus if an input was being edited
+            if (focusedId) {
+              const input = document.querySelector(`input[data-id="${focusedId}"]`);
+              if (input) {
+                input.focus();
+                input.value = focusedValue;
+              }
+            }
           })
           .catch((error) => console.error("Error fetching detections:", error));
       }
 
       function startDrawing(event) {
+        if (!canvas || !ctx) {
+          console.error("Canvas or context not initialized");
+          return;
+        }
         const rect = canvas.getBoundingClientRect();
         startX = event.clientX - rect.left;
         startY = event.clientY - rect.top;
@@ -170,7 +236,7 @@
       }
 
       function drawPreview(event) {
-        if (!drawing) return;
+        if (!drawing || !ctx) return;
         const rect = canvas.getBoundingClientRect();
         const currentX = event.clientX - rect.left;
         const currentY = event.clientY - rect.top;
@@ -182,26 +248,25 @@
       }
 
       function stopDrawing(event) {
-        if (drawing) {
-          const rect = canvas.getBoundingClientRect();
-          const endX = event.clientX - rect.left;
-          const endY = event.clientY - rect.top;
-          drawing = false;
-          canvas.removeEventListener("mousemove", drawPreview);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!drawing || !ctx) return;
+        const rect = canvas.getBoundingClientRect();
+        const endX = event.clientX - rect.left;
+        const endY = event.clientY - rect.top;
+        drawing = false;
+        canvas.removeEventListener("mousemove", drawPreview);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          fetch("/add_roi", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              start: { x: startX, y: startY },
-              end: { x: endX, y: endY },
-            }),
-          })
-            .then((response) => response.json())
-            .then(() => updateUI())
-            .catch((error) => console.error("Error adding ROI:", error));
-        }
+        fetch("/add_roi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            start: { x: startX, y: startY },
+            end: { x: endX, y: endY },
+          }),
+        })
+          .then((response) => response.json())
+          .then(() => updateUI())
+          .catch((error) => console.error("Error adding ROI:", error));
       }
 
       function updateROIName(id, name) {
@@ -211,8 +276,22 @@
           body: JSON.stringify({ id: id, name: name }),
         })
           .then((response) => response.json())
-          .then(() => updateUI())
+          .then(() => {
+            isEditing = false;  // Allow UI updates after saving
+            updateUI();
+          })
           .catch((error) => console.error("Error updating ROI name:", error));
+      }
+
+      function toggleROI(id, enabled) {
+        fetch("/toggle_roi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, enabled: enabled }),
+        })
+          .then((response) => response.json())
+          .then(() => updateUI())
+          .catch((error) => console.error("Error toggling ROI:", error));
       }
 
       function deleteROI(id) {
@@ -226,26 +305,84 @@
           .catch((error) => console.error("Error deleting ROI:", error));
       }
 
-      window.onload = () => {
-        setupCanvas();
-        canvas.addEventListener("mousedown", startDrawing);
-        canvas.addEventListener("mouseup", stopDrawing);
+      function connectMQTT() {
+        const brokerInput = document.getElementById("mqtt-broker").value;
+        const statusDiv = document.getElementById("mqtt-status");
+        
+        fetch("/connect_mqtt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ broker: brokerInput }),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            statusDiv.textContent = data.message;
+            statusDiv.style.color = data.status === "success" ? "#00ff00" : "#ff4444";
+          })
+          .catch((error) => {
+            statusDiv.textContent = "Error connecting to MQTT: " + error;
+            statusDiv.style.color = "#ff4444";
+          });
+      }
 
-        document
-          .getElementById("roi-panel")
-          .addEventListener("change", (event) => {
-            if (event.target.tagName === "INPUT") {
+      function resetDatabase() {
+        if (confirm("Are you sure you want to reset the database? This will delete all detections.")) {
+          fetch("/reset_db", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          })
+            .then((response) => response.json())
+            .then((data) => alert(data.status))
+            .catch((error) => console.error("Error resetting database:", error));
+        }
+      }
+
+      window.onload = () => {
+        try {
+          setupCanvas();
+          if (canvas) {
+            canvas.addEventListener("mousedown", startDrawing);
+            canvas.addEventListener("mouseup", stopDrawing);
+          } else {
+            console.error("Canvas not initialized, drawing disabled");
+          }
+
+          const roiPanel = document.getElementById("roi-panel");
+          roiPanel.addEventListener("focusin", (event) => {
+            if (event.target.tagName === "INPUT" && event.target.type === "text") {
+              isEditing = true;
+            }
+          }, true);
+
+          roiPanel.addEventListener("focusout", (event) => {
+            if (event.target.tagName === "INPUT" && event.target.type === "text") {
               const id = parseInt(event.target.getAttribute("data-id"));
               const name = event.target.value;
               updateROIName(id, name);
             }
+          }, true);
+
+          roiPanel.addEventListener("keypress", (event) => {
+            if (event.target.tagName === "INPUT" && event.target.type === "text" && event.key === "Enter") {
+              const id = parseInt(event.target.getAttribute("data-id"));
+              const name = event.target.value;
+              updateROIName(id, name);
+              event.target.blur();
+            }
           });
 
-        // Run updateUI immediately and then every second
-        updateUI();
-        setInterval(() => {
           updateUI();
-        }, 1000);
+          updateInterval = setInterval(() => {
+            updateUI();
+          }, 1000);
+
+          const statusDiv = document.getElementById("mqtt-status");
+          statusDiv.textContent = "{{ 'Connected to MQTT' if mqtt_connected else 'Not connected to MQTT' }}";
+          statusDiv.style.color = "{{ '#00ff00' if mqtt_connected else '#cccccc' }}";
+        } catch (error) {
+          console.error("Error in window.onload:", error);
+        }
       };
     </script>
   </head>
@@ -253,22 +390,38 @@
     <h1>ROI Person Detection</h1>
     <div class="container">
       <div class="video-container">
-        <img
-          id="video-feed"
-          src="{{ url_for('video_feed') }}"
-          alt="Video Feed"
-        />
-        <img
-          src="https://via.placeholder.com/100?text=Logo"
-          class="logo"
-          alt="Logo"
-        />
+        <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed" />
+        <img src="https://via.placeholder.com/100?text=Logo" class="logo" alt="Logo" />
       </div>
-      <div class="roi-panel" id="roi-panel"></div>
+      <div class="roi-panel" id="roi-panel">
+        {% for roi in rois %}
+        <div class="roi-item" style="border-left: 5px solid rgb({{ roi.color[2] }}, {{ roi.color[1] }}, {{ roi.color[0] }});">
+          <input type="text" value="{{ roi.name }}" data-id="{{ roi.id }}">
+          <input type="checkbox" {{ 'checked' if roi.enabled else '' }} onchange="toggleROI({{ roi.id }}, this.checked)">
+          <button onclick="deleteROI({{ roi.id }})">Delete</button>
+          <div class="detection-list">
+            {% for detection in roi.detections %}
+            <div>{{ detection.time }}</div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
     </div>
     <div id="warning"></div>
     <div id="roi-instructions">
       Click and drag on the video feed to draw a rectangular region of interest.
+    </div>
+    <div class="dashboard-link">
+      <a href="{{ url_for('dashboard') }}">View Detection Dashboard</a>
+    </div>
+    <div class="mqtt-section">
+      <input type="text" id="mqtt-broker" placeholder="Enter MQTT Broker (e.g., mqtt-broker)" value="mqtt-broker">
+      <button onclick="connectMQTT()">Connect to MQTT</button>
+      <div id="mqtt-status"></div>
+    </div>
+    <div class="reset-section">
+      <button class="reset-button" onclick="resetDatabase()">Reset Database</button>
     </div>
   </body>
 </html>

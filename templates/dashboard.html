@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Detection Dashboard</title>
+    <style>
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background-color: #1a1a1a;
+        color: #ffffff;
+        font-family: Arial, sans-serif;
+      }
+      h1, h2, h3 {
+        margin: 20px 0;
+      }
+      .dashboard-container {
+        width: 90%;
+        max-width: 1200px;
+        padding: 20px;
+        background-color: #333;
+        border-radius: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+      .left-panel {
+        flex: 2;
+        min-width: 300px;
+      }
+      .right-panel {
+        flex: 1;
+        min-width: 250px;
+        background-color: #3a3a3a;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+      }
+      .filter-section {
+        margin-bottom: 20px;
+      }
+      .filter-section label {
+        margin-right: 10px;
+      }
+      .filter-section input[type="checkbox"] {
+        margin: 0 5px 0 10px;
+      }
+      .filter-section button {
+        background-color: #00ccff;
+        border: none;
+        padding: 5px 10px;
+        color: white;
+        cursor: pointer;
+        border-radius: 4px;
+        margin-left: 10px;
+      }
+      .tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .tab-button {
+        background-color: #444;
+        border: none;
+        padding: 10px 20px;
+        color: white;
+        cursor: pointer;
+        border-radius: 5px 5px 0 0;
+      }
+      .tab-button.active {
+        background-color: #2a2a2a;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .chart-container {
+        background-color: #2a2a2a;
+        padding: 10px;
+        border-radius: 5px;
+      }
+      .summary h2 {
+        font-size: 2em;
+        margin: 10px 0;
+      }
+      .summary p {
+        font-size: 1.5em;
+        margin: 5px 0;
+      }
+      .roi-section {
+        margin-bottom: 20px;
+      }
+      .roi-header {
+        cursor: pointer;
+        padding: 5px;
+        background-color: #444;
+        border-radius: 5px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .roi-header:hover {
+        background-color: #555;
+      }
+      .roi-content {
+        transition: all 0.3s ease;
+      }
+      .collapse-icon {
+        font-size: 0.8em;
+        transition: transform 0.3s ease;
+      }
+      .roi-section.collapsed .collapse-icon {
+        transform: rotate(-90deg);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th, td {
+        padding: 8px;
+        text-align: left;
+        border-bottom: 1px solid #555;
+      }
+      th {
+        background-color: #444;
+      }
+      .detection-image {
+        max-width: 100px;
+        cursor: pointer;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.8);
+        justify-content: center;
+        align-items: center;
+      }
+      .modal-content {
+        position: relative;
+        max-width: 80%;
+        max-height: 80%;
+        background-color: #333;
+        padding: 20px;
+        border-radius: 5px;
+        text-align: center;
+      }
+      .modal-image {
+        max-width: 100%;
+        max-height: 60vh;
+        object-fit: contain;
+      }
+      .modal-nav {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        background-color: #00ccff;
+        color: white;
+        border: none;
+        padding: 10px;
+        cursor: pointer;
+        border-radius: 5px;
+      }
+      .modal-prev {
+        left: 10px;
+      }
+      .modal-next {
+        right: 10px;
+      }
+      .modal-close {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background-color: #ff4444;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        cursor: pointer;
+        border-radius: 5px;
+      }
+      .modal-header {
+        margin-bottom: 10px;
+        font-size: 1.5em;
+      }
+      .modal-caption {
+        margin-top: 10px;
+        font-size: 1.2em;
+      }
+      .back-link {
+        margin-top: 20px;
+        font-size: 1em;
+      }
+      .back-link a {
+        color: #00ccff;
+        text-decoration: none;
+      }
+      .back-link a:hover {
+        text-decoration: underline;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <h1>Detection Dashboard</h1>
+    <div class="dashboard-container">
+      <!-- Left Panel: Filter and Graphs -->
+      <div class="left-panel">
+        <div class="filter-section">
+          <form method="POST" action="/dashboard">
+            <label>Filter by ROI:</label>
+            <input type="checkbox" name="rois" value="all" id="roi-all" {% if 'all' in selected_rois or not selected_rois %}checked{% endif %}>
+            <label for="roi-all">All ROIs</label>
+            {% for roi in roi_options %}
+            <input type="checkbox" name="rois" value="{{ roi }}" id="roi-{{ roi }}" {% if roi in selected_rois %}checked{% endif %}>
+            <label for="roi-{{ roi }}">{{ roi }}</label>
+            {% endfor %}
+            <button type="submit">Apply</button>
+          </form>
+        </div>
+
+        <div class="tabs">
+          <button class="tab-button active" onclick="openTab('total')">Total</button>
+          <button class="tab-button" onclick="openTab('hour')">Hourly</button>
+          <button class="tab-button" onclick="openTab('day')">Daily</button>
+          <button class="tab-button" onclick="openTab('week')">Weekly</button>
+        </div>
+
+        <div id="total" class="tab-content active">
+          <div class="chart-container">
+            <h3>Total Detections by ROI</h3>
+            <canvas id="totalChart"></canvas>
+          </div>
+        </div>
+
+        <div id="hour" class="tab-content">
+          <div class="chart-container">
+            <h3>Detections Per Hour</h3>
+            <canvas id="hourChart"></canvas>
+          </div>
+        </div>
+
+        <div id="day" class="tab-content">
+          <div class="chart-container">
+            <h3>Detections Per Day</h3>
+            <canvas id="dayChart"></canvas>
+          </div>
+        </div>
+
+        <div id="week" class="tab-content">
+          <div class="chart-container">
+            <h3>Detections Per Week</h3>
+            <canvas id="weekChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel: Cumulative Totals and ROI Details -->
+      <div class="right-panel">
+        <div class="summary">
+          <h2>Hourly</h2>
+          <p>{{ total_hourly_sum }}</p>
+          <h2>Daily</h2>
+          <p>{{ total_daily_sum }}</p>
+          <h2>Weekly</h2>
+          <p>{{ total_weekly_sum }}</p>
+        </div>
+
+        <h3>Detection Details</h3>
+        {% for roi in detections_by_roi %}
+        <div class="roi-section">
+          <div class="roi-header" onclick="toggleCollapse('roi-{{ roi.roi_id }}')">
+            <strong>{{ roi.roi_name }} (ID: {{ roi.roi_id }})</strong>
+            <span class="collapse-icon">▼</span>
+          </div>
+          <div id="roi-{{ roi.roi_id }}" class="roi-content" style="display: none;">
+            <table>
+              <thead>
+                <tr><th>Time</th><th>Image</th></tr>
+              </thead>
+              <tbody>
+                {% for detection in roi.detections %}
+                <tr>
+                  <td>{{ detection.time }}</td>
+                  <td>
+                    {% if detection.image %}
+                    <img src="{{ url_for('serve_image', filename=detection.image | replace('/app/detections/', '')) }}"
+                         class="detection-image"
+                         data-roi-id="{{ roi.roi_id }}"
+                         data-roi-name="{{ roi.roi_name }}"
+                         data-image-index="{{ loop.index0 }}"
+                         onclick="openGallery(this)">
+                    {% else %}
+                    No Image
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="back-link">
+      <a href="{{ url_for('index') }}">Back to Video Feed</a>
+    </div>
+
+    <!-- Modal for Gallery -->
+    <div id="galleryModal" class="modal">
+      <div class="modal-content">
+        <h2 id="galleryHeader" class="modal-header"></h2>
+        <button class="modal-close" onclick="closeGallery()">Close</button>
+        <button class="modal-nav modal-prev" onclick="prevImage()">Previous</button>
+        <button class="modal-nav modal-next" onclick="nextImage()">Next</button>
+        <img id="galleryImage" class="modal-image" src="">
+        <div id="galleryCaption" class="modal-caption"></div>
+      </div>
+    </div>
+
+    <script>
+      let currentRoiId = null;
+      let currentRoiName = null;
+      let currentImageIndex = 0;
+      let imagesByRoi = {};
+
+      // Populate imagesByRoi for each ROI
+      {% for roi in detections_by_roi %}
+      imagesByRoi[{{ roi.roi_id }}] = [
+        {% for detection in roi.detections %}
+        {% if detection.image %}
+        {
+          src: "{{ url_for('serve_image', filename=detection.image | replace('/app/detections/', '')) }}",
+          time: "{{ detection.time }}"
+        }{% if not loop.last %},{% endif %}
+        {% endif %}
+        {% endfor %}
+      ];
+      {% endfor %}
+
+      function openTab(tabName) {
+        const tabs = document.getElementsByClassName("tab-content");
+        const buttons = document.getElementsByClassName("tab-button");
+        for (let i = 0; i < tabs.length; i++) {
+          tabs[i].classList.remove("active");
+          buttons[i].classList.remove("active");
+        }
+        document.getElementById(tabName).classList.add("active");
+        document.querySelector(`button[onclick="openTab('${tabName}')"]`).classList.add("active");
+      }
+
+      function toggleCollapse(roiId) {
+        const content = document.getElementById(roiId);
+        const section = content.parentElement;
+        const icon = section.querySelector('.collapse-icon');
+        if (content.style.display === "none") {
+          content.style.display = "block";
+          section.classList.remove("collapsed");
+        } else {
+          content.style.display = "none";
+          section.classList.add("collapsed");
+        }
+      }
+
+      function openGallery(element) {
+        currentRoiId = parseInt(element.getAttribute("data-roi-id"));
+        currentRoiName = element.getAttribute("data-roi-name");
+        currentImageIndex = parseInt(element.getAttribute("data-image-index"));
+        const modal = document.getElementById("galleryModal");
+        const galleryImage = document.getElementById("galleryImage");
+        const galleryCaption = document.getElementById("galleryCaption");
+        const galleryHeader = document.getElementById("galleryHeader");
+        const images = imagesByRoi[currentRoiId] || [];
+
+        if (images.length === 0) return;
+
+        galleryImage.src = images[currentImageIndex].src;
+        galleryCaption.textContent = `Detection at ${images[currentImageIndex].time}`;
+        galleryHeader.textContent = currentRoiName;
+        modal.style.display = "flex";
+      }
+
+      function closeGallery() {
+        const modal = document.getElementById("galleryModal");
+        modal.style.display = "none";
+      }
+
+      function prevImage() {
+        const images = imagesByRoi[currentRoiId] || [];
+        if (images.length === 0) return;
+        currentImageIndex = (currentImageIndex - 1 + images.length) % images.length;
+        const galleryImage = document.getElementById("galleryImage");
+        const galleryCaption = document.getElementById("galleryCaption");
+        const galleryHeader = document.getElementById("galleryHeader");
+        galleryImage.src = images[currentImageIndex].src;
+        galleryCaption.textContent = `Detection at ${images[currentImageIndex].time}`;
+        galleryHeader.textContent = currentRoiName;
+      }
+
+      function nextImage() {
+        const images = imagesByRoi[currentRoiId] || [];
+        if (images.length === 0) return;
+        currentImageIndex = (currentImageIndex + 1) % images.length;
+        const galleryImage = document.getElementById("galleryImage");
+        const galleryCaption = document.getElementById("galleryCaption");
+        const galleryHeader = document.getElementById("galleryHeader");
+        galleryImage.src = images[currentImageIndex].src;
+        galleryCaption.textContent = `Detection at ${images[currentImageIndex].time}`;
+        galleryHeader.textContent = currentRoiName;
+      }
+
+      new Chart(document.getElementById('totalChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: {{ chart_labels|tojson }},
+          datasets: [{
+            label: 'Total Detections',
+            data: {{ chart_data|tojson }},
+            backgroundColor: 'rgba(0, 204, 255, 0.6)',
+            borderColor: 'rgba(0, 204, 255, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Detections', color: '#fff' }, ticks: { color: '#fff' } },
+            x: { title: { display: true, text: 'ROI', color: '#fff' }, ticks: { color: '#fff' } }
+          },
+          plugins: { legend: { labels: { color: '#fff' } } }
+        }
+      });
+
+      new Chart(document.getElementById('hourChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: {{ hour_labels|tojson }},
+          datasets: {{ hour_datasets|tojson }}
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Detections', color: '#fff' }, ticks: { color: '#fff' } },
+            x: { title: { display: true, text: 'Hour', color: '#fff' }, ticks: { color: '#fff' } }
+          },
+          plugins: { legend: { labels: { color: '#fff' } } }
+        }
+      });
+
+      new Chart(document.getElementById('dayChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: {{ day_labels|tojson }},
+          datasets: {{ day_datasets|tojson }}
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Detections', color: '#fff' }, ticks: { color: '#fff' } },
+            x: { title: { display: true, text: 'Date', color: '#fff' }, ticks: { color: '#fff' } }
+          },
+          plugins: { legend: { labels: { color: '#fff' } } }
+        }
+      });
+
+      new Chart(document.getElementById('weekChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: {{ week_labels|tojson }},
+          datasets: {{ week_datasets|tojson }}
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Detections', color: '#fff' }, ticks: { color: '#fff' } },
+            x: { title: { display: true, text: 'Week', color: '#fff' }, ticks: { color: '#fff' } }
+          },
+          plugins: { legend: { labels: { color: '#fff' } } }
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.amd64
+    ports:
+      - "${FLASK_PORT:-5000}:5000"
+    environment:
+      - VIDEO_DEVICE_INDEX=${VIDEO_DEVICE_INDEX:-0}  # Default to 0 if not set
+      - CAMERA_TYPE=usb
+      - DB_HOST=postgres
+      - DB_NAME=${DB_NAME:-detections_db}
+      - DB_USER=${DB_USER:-user}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_PORT=${DB_PORT:-5432}
+    depends_on:
+      - postgres
+      - mqtt-broker
+      - roboflow-inference
+    volumes:
+      - ./detections:/app/detections
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    devices:
+      - /dev/video${VIDEO_DEVICE_INDEX:-0}:/dev/video${VIDEO_DEVICE_INDEX:-0}  # Use VIDEO_DEVICE_INDEX
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_DB=${DB_NAME:-detections_db}
+      - POSTGRES_USER=${DB_USER:-user}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  mqtt-broker:
+    image: eclipse-mosquitto:latest
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+
+  roboflow-inference:
+    image: roboflow/roboflow-inference-server-gpu:latest
+    ports:
+      - "${ROBOFLOW_PORT:-9001}:9001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  mosquitto-data:
+  mosquitto-log:
+  volumes:
+  detections:
