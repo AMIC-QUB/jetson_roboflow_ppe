@@ -85,10 +85,13 @@ WORKDIR /app
 COPY utils.py /app/utils.py
 COPY inference_usb.py /app/inference_usb.py
 COPY inference_realsense.py /app/inference_realsense.py
+COPY inference_ip.py /app/inference_ip.py
+COPY inference_tcp_server.py /app/inference_tcp_server.py
 COPY templates/index.html /app/templates/index.html
 COPY static /app/static
-# Expose ports: 9001 for Roboflow inference, 5000 for Flask web server
-EXPOSE 9001 5000
+
+# Expose ports: 9001 for Roboflow inference, 5000 for Flask web server, 12345 for TCP server
+EXPOSE 9001 5000 12345
 
 # Command to run the appropriate inference script based on CAMERA_TYPE
-CMD ["sh", "-c", "if [ \"$CAMERA_TYPE\" = \"realsense\" ]; then python3 inference_realsense.py; else python3 inference_usb.py; fi"]
+CMD ["sh", "-c", "if [ \"$CAMERA_TYPE\" = \"realsense\" ]; then python3 inference_realsense.py; elif [ \"$CAMERA_TYPE\" = \"ip\" ]; then python3 inference_ip.py; elif [ \"$CAMERA_TYPE\" = \"tcp_server\" ]; then python3 inference_tcp_server.py; else python3 inference_usb.py; fi"]

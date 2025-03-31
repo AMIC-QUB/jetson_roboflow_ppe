@@ -12,14 +12,14 @@ fi
 # Build the Docker image based on the architecture
 echo "Building Docker image for $ARCH..."
 if [ "$ARCH" == "jetson" ]; then
-    docker build -f Dockerfile.jetson -t roboflow-camera-web .
+    docker build -f Dockerfile.jetson -t roboflow-ppe-web .
 elif [ "$ARCH" == "amd64" ]; then
-    docker build -f Dockerfile.amd64 -t roboflow-camera-web .
+    docker build -f Dockerfile.amd64 -t roboflow-ppe-web .
 fi
 
 # Check if the build was successful
 if [ $? -eq 0 ]; then
-    echo "Successfully built Docker image 'roboflow-camera-web' for $ARCH."
+    echo "Successfully built Docker image 'roboflow-ppe-web' for $ARCH."
 else
     echo "Error: Failed to build Docker image for $ARCH."
     exit 1
