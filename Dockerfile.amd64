@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV CAMERA_TYPE=usb  
 
-# Install basic dependencies
+# Install basic dependencies, including git
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-dev \
@@ -26,8 +26,8 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     v4l-utils \
     wget \
+    git \ 
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
 
 # Update library cache
 RUN ldconfig
@@ -40,7 +40,8 @@ RUN pip3 install \
     numpy \
     pyrealsense2 \
     flask \
-    ultralytics  # Added for YOLOv8
+    # torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118 \
+    ultralytics  # Install ultralytics (YOLO-World)
 
 # Set working directory
 WORKDIR /app
@@ -48,9 +49,6 @@ WORKDIR /app
 # Copy inference scripts and HTML template
 COPY utils.py /app/utils.py
 COPY inference_usb.py /app/inference_usb.py
-COPY inference_realsense.py /app/inference_realsense.py
-COPY inference_ip.py /app/inference_ip.py
-COPY inference_tcp_server.py /app/inference_tcp_server.py
 COPY templates/index.html /app/templates/index.html
 COPY static /app/static
 
@@ -58,4 +56,4 @@ COPY static /app/static
 EXPOSE 9001 5000 12345
 
 # Command to run the appropriate inference script based on CAMERA_TYPE
-CMD ["sh", "-c", "if [ \"$CAMERA_TYPE\" = \"realsense\" ]; then python3 inference_realsense.py; elif [ \"$CAMERA_TYPE\" = \"ip\" ]; then python3 inference_ip.py; elif [ \"$CAMERA_TYPE\" = \"tcp_server\" ]; then python3 inference_tcp_server.py; else python3 inference_usb.py; fi"]
+CMD ["sh", "-c", "python3 inference_usb.py"]

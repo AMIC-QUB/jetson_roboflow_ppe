@@ -41,6 +41,58 @@
         font-weight: bold;
         display: none; /* Hidden by default */
       }
+      .prompt-container {
+        margin: 20px 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+      }
+      #prompt-input {
+        padding: 8px;
+        font-size: 1em;
+        background-color: #333;
+        color: #ffffff;
+        border: 1px solid #555;
+        border-radius: 4px;
+        width: 300px;
+      }
+      #update-btn {
+        padding: 8px 16px;
+        font-size: 1em;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #update-btn:hover {
+        background-color: #45a049;
+      }
+      #clear-btn {
+        padding: 8px 16px;
+        font-size: 1em;
+        background-color: #ff4444; /* Red to indicate a stop/pause action */
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #clear-btn:hover {
+        background-color: #cc0000;
+      }
+      #toggle-mode-btn {
+        padding: 8px 16px;
+        font-size: 1em;
+        background-color: #1e90ff; /* Blue to indicate a toggle action */
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #toggle-mode-btn:hover {
+        background-color: #1c86ee;
+      }
     </style>
     <script>
       // Fetch detection data and update warning
@@ -50,7 +102,7 @@
           .then((data) => {
             const warningDiv = document.getElementById("warning");
             const noHelmet = data.detections.some(
-              (d) => d.class === "no-helmet"
+              (d) => d.class === "worker without helmet"
             );
             const noVest = data.detections.some((d) => d.class === "no-vest");
 
@@ -67,6 +119,57 @@
           .catch((error) => console.error("Error fetching detections:", error));
       }
 
+      // Function to update prompts
+      function updatePrompts() {
+        const promptInput = document.getElementById("prompt-input").value;
+        if (promptInput.trim() === "") {
+          alert("Please enter at least one prompt.");
+          return;
+        }
+        fetch(`/update_prompts/${encodeURIComponent(promptInput)}`)
+          .then((response) => response.json())
+          .then((data) => {
+            console.log("Prompts updated:", data.prompts);
+            alert("Prompts updated successfully!");
+          })
+          .catch((error) => {
+            console.error("Error updating prompts:", error);
+            alert("Failed to update prompts.");
+          });
+      }
+
+      // Function to clear prompts and toggle pause
+      function clearPrompts() {
+        fetch('/clear_prompts')
+          .then(response => response.json())
+          .then(data => {
+            console.log("Prompts cleared, pause state:", data.paused);
+            document.getElementById('prompt-input').value = ''; // Clear the input field
+            const clearBtn = document.getElementById('clear-btn');
+            clearBtn.textContent = data.paused ? 'Resume Inference' : 'Clear Prompts'; // Update button text
+            alert(data.paused ? "Inference paused." : "Inference resumed.");
+          })
+          .catch(error => {
+            console.error("Error clearing prompts:", error);
+            alert("Failed to clear prompts.");
+          });
+      }
+
+      // Function to toggle between bounding boxes and segmentation
+      function toggleDisplayMode() {
+        fetch('/toggle_display_mode')
+          .then(response => response.json())
+          .then(data => {
+            console.log("Display mode toggled, show_segmentation:", data.show_segmentation);
+            const toggleBtn = document.getElementById('toggle-mode-btn');
+            toggleBtn.textContent = data.show_segmentation ? 'Switch to Bounding Boxes' : 'Switch to Segmentation';
+          })
+          .catch(error => {
+            console.error("Error toggling display mode:", error);
+            alert("Failed to toggle display mode.");
+          });
+      }
+
       // Poll for updates every second
       setInterval(updateWarnings, 1000);
       window.onload = updateWarnings; // Initial check
@@ -74,13 +177,19 @@
   </head>
   <body>
     <h1>AMIC Construction PPE Detection</h1>
+    <div class="prompt-container">
+      <input
+        type="text"
+        id="prompt-input"
+        placeholder="Enter prompts (e.g., worker with helmet, heavy machinery)"
+      />
+      <button id="update-btn" onclick="updatePrompts()">Update Prompts</button>
+      <button id="clear-btn" onclick="clearPrompts()">Clear Prompts</button>
+      <button id="toggle-mode-btn" onclick="toggleDisplayMode()">Switch to Segmentation</button>
+    </div>
     <div class="video-container">
       <img src="{{ url_for('video_feed') }}" alt="Video Feed" />
-      <img
-        src="/static/joint_logo.png"
-        class="logo"
-        alt="AMIC Logo"
-      />
+      <img src="/static/joint_logo.png" class="logo" alt="AMIC Logo" />
     </div>
     <div id="warning"></div>
   </body>
