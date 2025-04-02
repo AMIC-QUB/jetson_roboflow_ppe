@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     v4l-utils \
     wget \
-    git \ 
+    git \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Update library cache
@@ -40,11 +40,18 @@ RUN pip3 install \
     numpy \
     pyrealsense2 \
     flask \
-    # torch==2.0.1+cu118 torchvision==0.15.2+cu118 --index-url https://download.pytorch.org/whl/cu118 \
-    ultralytics  # Install ultralytics (YOLO-World)
+    ultralytics \
+    websocket-server
 
+# Pre-download YOLOE weights and dependencies
+RUN pip3 install \
+    huggingface-hub \
+    safetensors \
+    open-clip-torch \
+    timm 
 # Set working directory
 WORKDIR /app
+RUN python3 -c "from ultralytics import YOLOE; model = YOLOE('yoloe-11l-seg.pt')"
 
 # Copy inference scripts and HTML template
 COPY utils.py /app/utils.py
@@ -52,8 +59,8 @@ COPY inference_usb.py /app/inference_usb.py
 COPY templates/index.html /app/templates/index.html
 COPY static /app/static
 
-# Expose ports: 9001 for Roboflow inference, 5000 for Flask web server, 12345 for TCP server
-EXPOSE 9001 5000 12345
+# Expose ports: 5000 for Flask web server, 5001 for WebSocket, 12345 for TCP server
+EXPOSE 5000 5001 12345
 
 # Command to run the appropriate inference script based on CAMERA_TYPE
 CMD ["sh", "-c", "python3 inference_usb.py"]

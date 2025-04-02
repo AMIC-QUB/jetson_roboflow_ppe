@@ -22,10 +22,16 @@
         position: relative;
         max-width: 100%;
       }
-      img {
+      #video-feed {
         max-width: 100%;
         height: auto;
         border: 2px solid #ffffff;
+      }
+      #overlay-canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        pointer-events: none; /* Allow clicks to pass through to the video */
       }
       .logo {
         position: absolute;
@@ -95,28 +101,117 @@
       }
     </style>
     <script>
+      let detections = [];
+      let showSegmentation = false;
+      let canvas, ctx;
+
+      function initCanvas() {
+        const videoFeed = document.getElementById('video-feed');
+        canvas = document.getElementById('overlay-canvas');
+        ctx = canvas.getContext('2d');
+
+        // Set canvas size to match video feed
+        videoFeed.onload = function() {
+          console.log("Video feed loaded, setting canvas size");
+          canvas.width = videoFeed.width;
+          canvas.height = videoFeed.height;
+          drawDetections();
+        };
+
+        videoFeed.onerror = function() {
+          console.error("Error loading video feed");
+          document.getElementById('warning').textContent = "Error: Could not load video stream.";
+          document.getElementById('warning').style.display = "block";
+        };
+
+        // Adjust canvas size if the video feed resizes
+        videoFeed.addEventListener('resize', function() {
+          console.log("Video feed resized, updating canvas size");
+          canvas.width = videoFeed.width;
+          canvas.height = videoFeed.height;
+        });
+
+        // Start polling for detections
+        console.log("Starting to poll for detections");
+        setInterval(fetchDetections, 100); // Poll every 100ms
+
+        // Continuously redraw the canvas to ensure overlays stay in sync
+        function redrawLoop() {
+          drawDetections();
+          requestAnimationFrame(redrawLoop);
+        }
+        redrawLoop();
+      }
+
+      function fetchDetections() {
+        fetch('/detections')
+          .then(response => response.json())
+          .then(data => {
+            detections = data.detections || [];
+            console.log("Fetched detections:", detections);
+            updateWarnings();
+          })
+          .catch(error => console.error("Error fetching detections:", error));
+      }
+
+      function drawDetections() {
+        if (!ctx) return;
+
+        // Clear the canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw detections
+        detections.forEach(det => {
+          const { x1, y1, x2, y2, class: label, confidence, color, mask } = det;
+          const [r, g, b] = color;
+
+          if (showSegmentation && mask) {
+            // Draw segmentation mask
+            const maskData = new Uint8ClampedArray(mask.flat());
+            const maskImage = new ImageData(maskData, canvas.width, canvas.height);
+            for (let i = 0; i < maskImage.data.length; i += 4) {
+              if (maskImage.data[i] > 0) {
+                maskImage.data[i] = r;     // Red
+                maskImage.data[i + 1] = g; // Green
+                maskImage.data[i + 2] = b; // Blue
+                maskImage.data[i + 3] = 76; // Alpha (30% opacity)
+              } else {
+                maskImage.data[i + 3] = 0; // Transparent
+              }
+            }
+            ctx.putImageData(maskImage, 0, 0);
+            // Draw label above the mask
+            ctx.font = '20px Arial';
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.fillText(`${label} (${confidence.toFixed(2)})`, x1, y1 - 10);
+          } else {
+            // Draw bounding box
+            ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            // Draw label
+            ctx.font = '20px Arial';
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.fillText(`${label} (${confidence.toFixed(2)})`, x1, y1 - 10);
+          }
+        });
+      }
+
       // Fetch detection data and update warning
       function updateWarnings() {
-        fetch("/detections")
-          .then((response) => response.json())
-          .then((data) => {
-            const warningDiv = document.getElementById("warning");
-            const noHelmet = data.detections.some(
-              (d) => d.class === "worker without helmet"
-            );
-            const noVest = data.detections.some((d) => d.class === "no-vest");
+        const warningDiv = document.getElementById("warning");
+        const noHelmet = detections.some(d => d.class === "worker without helmet");
+        const noVest = detections.some(d => d.class === "no-vest");
 
-            if (noHelmet || noVest) {
-              let warningText = "WARNING: ";
-              if (noHelmet) warningText += "No helmet detected. ";
-              if (noVest) warningText += "No vest detected.";
-              warningDiv.textContent = warningText;
-              warningDiv.style.display = "block";
-            } else {
-              warningDiv.style.display = "none";
-            }
-          })
-          .catch((error) => console.error("Error fetching detections:", error));
+        if (noHelmet || noVest) {
+          let warningText = "WARNING: ";
+          if (noHelmet) warningText += "No helmet detected. ";
+          if (noVest) warningText += "No vest detected.";
+          warningDiv.textContent = warningText;
+          warningDiv.style.display = "block";
+        } else {
+          warningDiv.style.display = "none";
+        }
       }
 
       // Function to update prompts
@@ -148,6 +243,10 @@
             const clearBtn = document.getElementById('clear-btn');
             clearBtn.textContent = data.paused ? 'Resume Inference' : 'Clear Prompts'; // Update button text
             alert(data.paused ? "Inference paused." : "Inference resumed.");
+            if (!data.paused && data.prompts.length === 0) {
+              document.getElementById('warning').textContent = "Inference paused: Add new prompts to resume.";
+              document.getElementById('warning').style.display = "block";
+            }
           })
           .catch(error => {
             console.error("Error clearing prompts:", error);
@@ -161,6 +260,7 @@
           .then(response => response.json())
           .then(data => {
             console.log("Display mode toggled, show_segmentation:", data.show_segmentation);
+            showSegmentation = data.show_segmentation;
             const toggleBtn = document.getElementById('toggle-mode-btn');
             toggleBtn.textContent = data.show_segmentation ? 'Switch to Bounding Boxes' : 'Switch to Segmentation';
           })
@@ -170,9 +270,8 @@
           });
       }
 
-      // Poll for updates every second
-      setInterval(updateWarnings, 1000);
-      window.onload = updateWarnings; // Initial check
+      // Initialize the canvas when the page loads
+      window.onload = initCanvas;
     </script>
   </head>
   <body>
@@ -188,7 +287,8 @@
       <button id="toggle-mode-btn" onclick="toggleDisplayMode()">Switch to Segmentation</button>
     </div>
     <div class="video-container">
-      <img src="{{ url_for('video_feed') }}" alt="Video Feed" />
+      <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed" />
+      <canvas id="overlay-canvas"></canvas>
       <img src="/static/joint_logo.png" class="logo" alt="AMIC Logo" />
     </div>
     <div id="warning"></div>
