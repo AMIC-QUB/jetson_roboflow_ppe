@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AMIC Construction PPE Detection - Visual Prompt</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/visual_prompt.css') }}">
+  </head>
+  <body>
+    <h1>AMIC Construction PPE Detection - Visual Prompt</h1>
+    <div class="prompt-container">
+      <select id="class-select"></select>
+      <button id="add-box-btn" onclick="addBox()">Add Bounding Box</button>
+      <button id="submit-btn" onclick="submitPrompt()">Submit Prompt</button>
+      <button id="back-btn" onclick="goBack()">Back to Main Page</button>
+    </div>
+    <div class="container">
+      <canvas id="frame-canvas"></canvas>
+      <canvas id="result-canvas"></canvas>
+    </div>
+    <div id="warning"></div>
+    <script>
+      // Define userPrompts and frameBase64 as global variables
+      window.userPrompts = {{ user_prompts | tojson }};
+      window.frameBase64 = "{{ frame_base64 }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/visual_prompt.js') }}"></script>
+  </body>
+</html>

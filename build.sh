@@ -14,7 +14,7 @@ echo "Building Docker image for $ARCH..."
 if [ "$ARCH" == "jetson" ]; then
     docker build -f Dockerfile.jetson -t roboflow-ppe-web .
 elif [ "$ARCH" == "amd64" ]; then
-    docker build -f Dockerfile.amd64 -t roboflow-ppe-web .
+    docker build -f Dockerfile.amd64 --no-cache -t roboflow-ppe-web . 
 fi
 
 # Check if the build was successful

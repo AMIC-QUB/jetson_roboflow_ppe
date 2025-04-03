@@ -38,11 +38,14 @@ RUN pip3 install \
     roboflow \
     requests \
     numpy \
-    pyrealsense2 \
     flask \
-    ultralytics \
     websocket-server
+RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/CLIP"
+RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/ml-mobileclip"
+RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/lvis-api"
+RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git"
 
+    
 # Pre-download YOLOE weights and dependencies
 RUN pip3 install \
     huggingface-hub \
@@ -51,16 +54,16 @@ RUN pip3 install \
     timm 
 # Set working directory
 WORKDIR /app
+RUN wget -q https://docs-assets.developer.apple.com/ml-research/datasets/mobileclip/mobileclip_blt.pt
 RUN python3 -c "from ultralytics import YOLOE; model = YOLOE('yoloe-11l-seg.pt')"
 
 # Copy inference scripts and HTML template
-COPY utils.py /app/utils.py
-COPY inference_usb.py /app/inference_usb.py
-COPY templates/index.html /app/templates/index.html
+COPY app /app/app
+COPY templates/ /app/templates/
 COPY static /app/static
-
+COPY main.py /app/main.py
 # Expose ports: 5000 for Flask web server, 5001 for WebSocket, 12345 for TCP server
 EXPOSE 5000 5001 12345
 
 # Command to run the appropriate inference script based on CAMERA_TYPE
-CMD ["sh", "-c", "python3 inference_usb.py"]
+CMD ["sh", "-c", "python3 main.py"]
