@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Global variables for inference
 latest_detections = []  # Store latest detections
-user_prompts = ["person", "can"]  # Default prompts
+user_prompts = ["croc", "jetson"]  # Default prompts
 class_colors = {}  # Dictionary to store consistent colors for each class
 frame_counter = 0  # Frame counter for running detections
 last_results = None  # Store the most recent results for reuse
@@ -114,32 +114,12 @@ def process_detections(get_frame_func: Callable[[], tuple[bool, np.ndarray | Non
                 image_base64 = encode_image_to_base64(target_image)
 
                 # Send request to the model service
-                if visual_prompts is not None:
-                    logger.debug("Using precomputed vpe for inference with visual prompts")
-                    # Since vpe is already set, just predict
-                    response = requests.post(
-                        f"{MODEL_SERVICE_URL}/predict",
-                        json={"image_base64": image_base64,
-                                "user_prompts": user_prompts
-                        }
-                    )
-                else:
-                    # Set classes without vpe
-                    logger.debug("shouldn't be here")
-                    # response = requests.post(
-                    #     f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
-                    #     json={"classes": user_prompts}
-                    # )
-                    # if response.status_code != 200:
-                    #     logger.error(f"Failed to set classes: {response.text}")
-                    #     continue
-                    # # Predict
-                    # response = requests.post(
-                    #     f"{MODEL_SERVICE_URL}/predict",
-                    #     json={"image_base64": image_base64,
-                    #           "user_prompts": user_prompts}
-                    # )
-
+                response = requests.post(
+                    f"{MODEL_SERVICE_URL}/predict",
+                    json={"image_base64": image_base64,
+                            "user_prompts": user_prompts
+                    }
+                )
                 if response.status_code != 200:
                     logger.error(f"Failed to get inference results: {response.text}")
                     continue

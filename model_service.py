@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from ultralytics import YOLOE
-from ultralytics.models.yolo.yoloe.predict_vp import YOLOEVPSegPredictor
+from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
 import torch
 import logging
 from PIL import Image
@@ -26,48 +26,47 @@ app = FastAPI()
 class ModelManager:
     def __init__(self):
         try:
-            self.model = YOLOE("yoloe-v8l-seg.pt")
+            self.model = YOLOE("yoloe-11l-seg.pt")
             self.model.to('cuda')
             logger.info("YOLOE model loaded successfully in ModelManager")
-            self.vp_set=True
+            self.vp=False
         except Exception as e:
             logger.error(f"Failed to load YOLOE model: {e}")
             raise
         self.class_colours = {}
+        self.refer_frame = None
     def predict_with_visual_prompts(self, source_image, prompts, user_prompts):
         """Generate visual prompt embeddings (vpe) and set classes."""
-        # Reset the predictor to ensure a clean state
-        # self.model.predictor = YOLOEVPSegPredictor()
-        logger.debug("loading new ")
-        model = YOLOE("yoloe-v8l-seg.pt")
-        # First stage: Generate visual prompt embeddings (vpe)
-        logger.debug(f"Inference completed, results: {prompts}")
-
+        if self.refer_frame is None:  # Set reference frame only once
+            self.refer_frame = np.array(source_image)
+        self.refer_image = Image.fromarray(cv2.cvtColor(self.refer_frame, cv2.COLOR_BGR2RGB))
         prompts['bboxes'] = np.array(prompts['bboxes'])
         prompts['cls'] = np.array(prompts['cls'], dtype=np.int32)
-        model.predict(
-            source_image,
-            prompts=prompts,
-            predictor=YOLOEVPSegPredictor,
-            return_vpe=True
-        )
+        self.prompts = prompts.copy()
+        results = self.model.predict(
+                    source_image,
+                    refer_image=self.refer_image,
+                    visual_prompts=self.prompts,
+                    predictor=YOLOEVPSegPredictor,
+                )
+        self.vp=True
+        return results
         
-        # Set classes with the generated vpe
-        model.set_classes(user_prompts, model.predictor.vpe)
-        model.predictor = None
-        logger.debug("Visual prompt embeddings set")
-        self.vp_set=True
-        self.model = model
 
     def predict(self, target_image, user_prompts):
         """Run inference on the target image."""
         # Ensure the predictor is set before inference
-        if self.vp_set:
+        if self.vp:
             logger.debug("running inference with vpe embeddings")
-            results = self.model.predict(target_image)
+            results = self.model.predict(
+                    target_image,
+                    refer_image=self.refer_image,
+                    visual_prompts=self.prompts,
+                    predictor=YOLOEVPSegPredictor,
+                )
         else:
-            self.set_classes_without_vpe(user_prompts)
-            results = self.model.predict(target_image, conf=0.1, verbose=False)
+            self.model.set_classes(user_prompts, self.model.get_text_pe(user_prompts))
+            results = self.model.predict(target_image, conf=0.6, verbose=False)
         logger.debug("Inference completed, results: %s", len(results))
         return results
 

@@ -39,11 +39,12 @@ RUN pip3 install \
     requests \
     numpy \
     flask \
-    websocket-server
+    websocket-server \
+    ultralytics
 RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/CLIP"
 RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/ml-mobileclip"
 RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git#subdirectory=third_party/lvis-api"
-RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git"
+# RUN pip install -q "git+https://github.com/THU-MIG/yoloe.git"
 
     
 # Pre-download YOLOE weights and dependencies
