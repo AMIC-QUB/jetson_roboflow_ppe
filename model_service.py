@@ -9,6 +9,8 @@ import io
 import base64
 import numpy as np
 import cv2
+from typing import Union
+import supervision as sv
 # Set up logging
 logging.basicConfig(
     level=logging.DEBUG,
@@ -31,6 +33,7 @@ class ModelManager:
             self.model.to('cuda')
             logger.info("YOLOE model loaded successfully in ModelManager")
             self.vp=False
+            self.labels_set = False
         except Exception as e:
             logger.error(f"Failed to load YOLOE model: {e}")
             raise
@@ -57,6 +60,9 @@ class ModelManager:
     def predict(self, target_image, user_prompts):
         """Run inference on the target image."""
         # Ensure the predictor is set before inference
+        if not self.labels_set:
+            self.model.set_classes(user_prompts, self.model.get_text_pe(user_prompts))
+            self.labels_set = True
         if self.vp:
             logger.debug("running inference with vpe embeddings")
             results = self.model.predict(
@@ -66,7 +72,7 @@ class ModelManager:
                     predictor=YOLOEVPSegPredictor,
                 )
         else:
-            self.model.set_classes(user_prompts, self.model.get_text_pe(user_prompts))
+            # self.model.set_classes(user_prompts, self.model.get_text_pe(user_prompts))
             results = self.model.predict(target_image, conf=0.3, verbose=True)
         logger.debug("Inference completed, results: %s", len(results))
         return results
@@ -94,7 +100,6 @@ class PredictRequest(BaseModel):
 
 class SetClassesRequest(BaseModel):
     classes: list
-
 # Helper function to decode base64 image
 def decode_base64_image(image_base64: str) -> Image.Image:
     try:
@@ -120,56 +125,22 @@ async def predict_with_visual_prompts(request: VisualPromptRequest):
     # except Exception as e:
     #     logger.error(f"Error in predict_with_visual_prompts: {e}")
     #     raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/predict")
 async def predict(request: PredictRequest):
-    global class_colors
     try:
-        # Decode the base64 image
         target_image = decode_base64_image(request.image_base64)
-
-        # Run inference
         results = model_manager.predict(target_image, request.user_prompts)
-
-        # Process results into a JSON-serializable format
-        filtered_predictions = []
-        for r in results:
-            boxes = r.boxes
-            masks = r.masks if hasattr(r, 'masks') else None
-            for i, box in enumerate(boxes):
-                xyxy = box.xyxy[0].cpu().numpy()
-                conf = box.conf.cpu().numpy().item()
-                cls = int(box.cls.cpu().numpy())
-                label = request.user_prompts[cls] if cls < len(request.user_prompts) else "Unknown"
-
-                mask_data = None
-                if masks is not None:
-                    mask = masks[i].data[0].cpu().numpy()
-                    mask = cv2.resize(mask, (target_image.size[0], target_image.size[1]), interpolation=cv2.INTER_NEAREST)
-                    mask = mask.astype(np.uint8)
-                    mask_data = mask.tolist()
-
-                pred = {
-                    "x": int((xyxy[0] + xyxy[2]) / 2),
-                    "y": int((xyxy[1] + xyxy[3]) / 2),
-                    "width": int(xyxy[2] - xyxy[0]),
-                    "height": int(xyxy[3] - xyxy[1]),
-                    "x1": int(xyxy[0]),
-                    "y1": int(xyxy[1]),
-                    "x2": int(xyxy[2]),
-                    "y2": int(xyxy[3]),
-                    "class": label,
-                    "confidence": conf,
-                    "color": class_colors.setdefault(label, (np.random.randint(0, 256), np.random.randint(0, 256), np.random.randint(0, 256))),
-                    "mask": mask_data
-                }
-                filtered_predictions.append(pred)
-
-        return {"detections": filtered_predictions}
+        sv_detections = sv.Detections.from_ultralytics(results[0])
+        return {
+            "xyxy": sv_detections.xyxy.tolist(),
+            "confidence": sv_detections.confidence.tolist(),
+            "class_id": sv_detections.class_id.tolist(),
+            "mask": sv_detections.mask.tolist() if sv_detections.mask is not None else None
+        }
     except Exception as e:
         logger.error(f"Error in predict: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.post("/set_classes_without_vpe")
 async def set_classes_without_vpe(request: SetClassesRequest):
     try:

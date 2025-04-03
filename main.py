@@ -31,17 +31,17 @@ if __name__ == "__main__":
         logger.warning(f"Frame source test failed: {e}, proceeding anyway")
 
     # Start the detection thread, passing the get_frame function
-    logger.info("Starting detection thread from main.py")
-    detection_thread = threading.Thread(target=process_detections, daemon=True)
-    detection_thread.start()
-    logger.info("Detection thread started")
+    # logger.info("Starting detection thread from main.py")
+    # detection_thread = threading.Thread(target=process_detections, daemon=True)
+    # detection_thread.start()
+    # logger.info("Detection thread started")
     
     # Verify the thread is running
     time.sleep(1)  # Give the thread a moment to start
-    if detection_thread.is_alive():
-        logger.info("Detection thread is running")
-    else:
-        logger.error("Detection thread failed to start or exited immediately")
+    # if detection_thread.is_alive():
+    #     logger.info("Detection thread is running")
+    # else:
+    #     logger.error("Detection thread failed to start or exited immediately")
 
     # Run the Flask app
     logger.info("Starting Flask app on port 5000")

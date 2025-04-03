@@ -41,9 +41,9 @@ def index():
             # Save the video file
             video_path = "/tmp/main_video.mp4"
             file.save(video_path)
-            inference.stop_inference_thread()  # Stop the current inference thread
+            # inference.stop_inference_thread()  # Stop the current inference thread
             inference.video_file_path = video_path  # Store the video file path globally
-            inference.start_inference_thread()  # Start a new inference thread
+            # inference.start_inference_thread()  # Start a new inference thread
             logger.debug("Video file uploaded and stored at: %s", video_path)
         except Exception as e:
             logger.error(f"Exception while processing video file: {e}")
@@ -51,12 +51,12 @@ def index():
 
     # Reset video_file_path when switching back to webcam
     if request.method == 'GET' and inference.video_file_path is not None:
-        inference.stop_inference_thread()  # Stop the current inference thread
+        # inference.stop_inference_thread()  # Stop the current inference thread
         inference.video_file_path = None
         if inference.video_cap is not None:
             inference.video_cap.release()
             inference.video_cap = None
-        inference.start_inference_thread()  # Start a new inference thread
+        # inference.start_inference_thread()  # Start a new inference thread
         logger.debug("Switched back to webcam feed")
 
     # Log the values being passed to the template

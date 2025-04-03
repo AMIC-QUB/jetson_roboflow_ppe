@@ -8,16 +8,15 @@ from PIL import Image
 import requests
 import base64
 import io
+import json
 from . import app
-import queue
-import threading
-
+import supervision as sv
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Global variables for inference
 latest_detections = []  # Store latest detections
-user_prompts = ["person", "hard hat", "spade", "digger", "excavator", "high vis vest", "shovel"]  # Default prompts
+user_prompts = ["person"]  # Default prompts
 class_colors = {}  # Dictionary to store consistent colors for each class
 frame_counter = 0  # Frame counter for running detections
 last_results = None  # Store the most recent results for reuse
@@ -29,24 +28,19 @@ is_on_visual_prompt = False  # Flag to pause detections when on the visual promp
 video_file_path = None  # Store the path to the uploaded video file
 video_cap = None  # VideoCapture object for the video file
 
-# Thread-safe queue for sharing frames between generate_frames and process_detections
-frame_queue = queue.Queue(maxsize=10)  # Buffer up to 10 frames
-inference_thread_running = False  # Flag to control the inference thread
-inference_thread = None  # Thread for process_detections
-
-# Desired frame rate (24 FPS)
-TARGET_FPS = 30
-FRAME_INTERVAL = 1.0 / TARGET_FPS  # Time per frame in seconds (≈ 0.04167 seconds for 24 FPS)
-
 # Define class-specific colors (BGR format for OpenCV)
 POSITIVE_CLASSES = {"worker with helmet", "safety vest"}
 NEGATIVE_CLASSES = {"worker without helmet"}
 GREEN = (0, 255, 0)  # Positive color
 RED = (0, 0, 255)    # Negative color
-CONFIDENCE_THRESHOLD = 0.3  # Adjusted for YOLOE
+CONFIDENCE_THRESHOLD = 0.75  # Adjusted for YOLOE
 
 # Model service URL
 MODEL_SERVICE_URL = "http://localhost:8000"
+
+# Desired frame rate (24 FPS)
+TARGET_FPS = 24
+FRAME_INTERVAL = 1.0 / TARGET_FPS  # Time per frame in seconds (≈ 0.04167 seconds for 24 FPS)
 
 def encode_image_to_base64(image):
     """Encode a PIL Image to base64 string."""
@@ -54,96 +48,13 @@ def encode_image_to_base64(image):
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-def process_detections():
-    """Background thread to run YOLOE inference on frames from the queue."""
-    global latest_detections, user_prompts, frame_counter, last_results, is_paused, show_segmentation, last_inference_time, visual_prompts, is_on_visual_prompt, inference_thread_running
-    logger.info("Inside process_detections: Thread has started")
-
-    while inference_thread_running:
-        try:
-            logger.debug("Inference thread loop iteration")
-            if is_paused or not user_prompts or is_on_visual_prompt:
-                logger.debug("Inference paused: is_paused=%s, user_prompts=%s, is_on_visual_prompt=%s", is_paused, user_prompts, is_on_visual_prompt)
-                time.sleep(0.1)
-                continue
-
-            # Get the next frame from the queue
-            try:
-                frame = frame_queue.get(timeout=1.0)  # Blocking get with timeout
-                logger.debug("Retrieved frame from queue for inference")
-            except queue.Empty:
-                logger.warning("Frame queue is empty, waiting for frames")
-                continue
-
-            # Convert the frame to a PIL Image (no resizing)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            target_image = Image.fromarray(frame_rgb)
-
-            # Run YOLOE inference every 100ms (10Hz)
-            if time.time() - last_inference_time >= 0.1:  # 100ms interval
-                logger.debug("Running YOLOE inference")
-                # Encode the image to base64
-                image_base64 = encode_image_to_base64(target_image)
-
-                # Send request to the model service
-                response = requests.post(
-                    f"{MODEL_SERVICE_URL}/predict",
-                    json={"image_base64": image_base64, "user_prompts": user_prompts}
-                )
-                if response.status_code != 200:
-                    logger.error(f"Failed to get inference results: {response.text}")
-                    continue
-
-                results = response.json().get("detections", [])
-                last_results = results  # Store the latest results
-                last_inference_time = time.time()  # Update the last inference time
-                logger.info(f"Inference completed, results: {len(results)} objects detected")
-            else:
-                results = last_results if last_results is not None else []  # Use the last results if available
-
-            # Update latest detections
-            latest_detections = results
-
-        except Exception as e:
-            logger.error(f"Error in process_detections: {e}")
-            time.sleep(1)  # Wait before retrying to avoid spamming errors
-
-def start_inference_thread():
-    """Start the inference thread."""
-    global inference_thread_running, inference_thread
-    if not inference_thread_running:
-        inference_thread_running = True
-        inference_thread = threading.Thread(target=process_detections)
-        inference_thread.daemon = True  # Daemon thread will exit when the main program exits
-        inference_thread.start()
-        logger.debug("Inference thread started")
-
-def stop_inference_thread():
-    """Stop the inference thread."""
-    global inference_thread_running, inference_thread
-    if inference_thread_running:
-        inference_thread_running = False
-        if inference_thread is not None:
-            inference_thread.join()
-            inference_thread = None
-        # Clear the frame queue
-        while not frame_queue.empty():
-            try:
-                frame_queue.get_nowait()
-            except queue.Empty:
-                break
-        logger.debug("Inference thread stopped and frame queue cleared")
-
 def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> Generator[bytes, None, None]:
-    """Generator function to yield video frames from webcam or video file at 24 FPS."""
-    global is_paused, video_file_path, video_cap
+    """Generator function to yield video frames with their detections at 24 FPS."""
+    global is_paused, video_file_path, video_cap, latest_detections, user_prompts, is_on_visual_prompt, show_segmentation
     # Check if get_frame is callable
     if not inspect.isfunction(get_frame) and not inspect.ismethod(get_frame):
         logger.error(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
         raise TypeError(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
-
-    # Start the inference thread if not already running
-    start_inference_thread()
 
     # Determine the frame source
     if video_file_path and not is_on_visual_prompt:
@@ -167,6 +78,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
         try:
             frame_start_time = time.time()
 
+            # Read the frame
             if video_file_path and video_cap and video_cap.isOpened() and not is_on_visual_prompt:
                 # Read frames from the video file
                 ret, frame = video_cap.read()
@@ -178,7 +90,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                     if not ret or frame is None:
                         logger.error("Could not read frame from video file after looping")
                         break
-                logger.debug("Using video file frame for rendering")
+                logger.debug("Using video file frame for rendering and inference")
             else:
                 # Fall back to webcam feed
                 frame_source = get_frame()  # Initialize the frame source (this is a generator)
@@ -186,35 +98,60 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 if not ret or frame is None:
                     logger.error("Could not retrieve frame in generate_frames")
                     break
-                logger.debug("Using webcam frame for rendering")
+                logger.debug("Using webcam frame for rendering and inference")
 
             # Resize frame to 640x480 for consistency
             frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_AREA)
 
-            # Pass the frame to process_detections via the queue
+            # Run inference on the frame
+            detections = []
+            if not is_paused and user_prompts and not is_on_visual_prompt:
+                logger.debug("Running YOLOE inference on frame")
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                target_image = Image.fromarray(frame_rgb)
+                image_base64 = encode_image_to_base64(target_image)
+                response = requests.post(
+                    f"{MODEL_SERVICE_URL}/predict",
+                    json={"image_base64": image_base64, "user_prompts": user_prompts}
+                )
+                if response.status_code == 200:
+                    detections = response.json()
+                    latest_detections = detections  # Update global detections
+                    logger.info(f"Inference completed, results: {len(detections)} objects detected")
+                else:
+                    logger.error(f"Failed to get inference results: {response.text}")
+            else:
+                # detections = latest_detections if latest_detections is not None else []
+                logger.debug("Inference skipped: is_paused=%s, user_prompts=%s, is_on_visual_prompt=%s", is_paused, user_prompts, is_on_visual_prompt)
             try:
-                frame_queue.put(frame, timeout=0.1)  # Non-blocking put with timeout
-                logger.debug("Frame added to queue for inference, queue size: %s", frame_queue.qsize())
-            except queue.Full:
-                logger.warning("Frame queue is full, dropping frame for inference")
-                # Remove the oldest frame to make space
-                try:
-                    frame_queue.get_nowait()
-                    frame_queue.put(frame, timeout=0.1)
-                except queue.Empty:
-                    pass
+                awod
+                sv_detections = sv.Detections(
+                    xyxy=np.array(detections['xyxy'], dtype=np.float32),
+                    mask=np.array(detections['mask'], dtype=bool) if detections['mask'] is not None else None,
+                    confidence=np.array(detections['confidence'], dtype=np.float32),
+                    class_id=np.array(detections['class_id'], dtype=np.int32),
+                    data={'class_names': user_prompts} if user_prompts else {}
+                )
+                annotated_image = frame.copy()
+                annotated_image = sv.ColorAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                annotated_image = sv.BoxAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                ret, buffer = cv2.imencode('.jpg', annotated_image, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+            except Exception as o:
+                ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
 
             # Encode frame as JPEG for streaming
-            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+
             if not ret:
                 logger.error("Failed to encode frame as JPEG in generate_frames")
-                break
+                continue
             frame_bytes = buffer.tobytes()
 
-            # Yield frame in the format expected by the browser
+            # Yield frame and detections in a custom multipart format
             yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            logger.debug("Sent video frame via /video_feed")
+                   b'Content-Type: image/jpeg\r\n'
+                   b'\r\n' + frame_bytes + b'\r\n')
+            logger.debug("Sent video frame with detections via /video_feed")
 
             # Calculate elapsed time and adjust delay to maintain 24 FPS
             frame_count += 1
@@ -233,3 +170,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
         except Exception as e:
             logger.error(f"Error in frame generation: {e}")
             break
+
+# Remove process_detections since inference is now handled in generate_frames
+def process_detections(get_frame_func: Callable[[], tuple[bool, np.ndarray | None]]):
+    pass
