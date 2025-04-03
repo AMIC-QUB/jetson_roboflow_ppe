@@ -6,6 +6,8 @@ import torch
 import logging
 from PIL import Image
 import io
+import time
+
 import base64
 import numpy as np
 import cv2
@@ -127,15 +129,23 @@ async def predict_with_visual_prompts(request: VisualPromptRequest):
     #     raise HTTPException(status_code=500, detail=str(e))
 @app.post("/predict")
 async def predict(request: PredictRequest):
+    start = time.time()
     try:
         target_image = decode_base64_image(request.image_base64)
         results = model_manager.predict(target_image, request.user_prompts)
         sv_detections = sv.Detections.from_ultralytics(results[0])
+        
+        logger.info(f"Inference Internal: {(time.time() - start) * 1000}")
         return {
             "xyxy": sv_detections.xyxy.tolist(),
             "confidence": sv_detections.confidence.tolist(),
             "class_id": sv_detections.class_id.tolist(),
-            "mask": sv_detections.mask.tolist() if sv_detections.mask is not None else None
+            "mask": None,
+            "class_names": [model_manager.model.names[class_id]
+                            for class_id
+                            in sv_detections.class_id
+]
+            # "mask": sv_detections.mask.tolist() if sv_detections.mask is not None else None
         }
     except Exception as e:
         logger.error(f"Error in predict: {e}")

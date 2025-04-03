@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Global variables for inference
 latest_detections = []  # Store latest detections
-user_prompts = ["person"]  # Default prompts
+user_prompts = ["person", "spade", "hard hat", "digger", "machinery", "vest", "building", "robot", "truck", "car", "dirt"]  # Default prompts
 class_colors = {}  # Dictionary to store consistent colors for each class
 frame_counter = 0  # Frame counter for running detections
 last_results = None  # Store the most recent results for reuse
@@ -33,13 +33,13 @@ POSITIVE_CLASSES = {"worker with helmet", "safety vest"}
 NEGATIVE_CLASSES = {"worker without helmet"}
 GREEN = (0, 255, 0)  # Positive color
 RED = (0, 0, 255)    # Negative color
-CONFIDENCE_THRESHOLD = 0.75  # Adjusted for YOLOE
+CONFIDENCE_THRESHOLD = 0.25  # Adjusted for YOLOE
 
 # Model service URL
 MODEL_SERVICE_URL = "http://localhost:8000"
 
 # Desired frame rate (24 FPS)
-TARGET_FPS = 24
+TARGET_FPS = 600
 FRAME_INTERVAL = 1.0 / TARGET_FPS  # Time per frame in seconds (≈ 0.04167 seconds for 24 FPS)
 
 def encode_image_to_base64(image):
@@ -105,6 +105,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
 
             # Run inference on the frame
             detections = []
+            start_time = time.time()
             if not is_paused and user_prompts and not is_on_visual_prompt:
                 logger.debug("Running YOLOE inference on frame")
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -114,6 +115,7 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                     f"{MODEL_SERVICE_URL}/predict",
                     json={"image_base64": image_base64, "user_prompts": user_prompts}
                 )
+                response_time = time.time()-start_time
                 if response.status_code == 200:
                     detections = response.json()
                     latest_detections = detections  # Update global detections
@@ -124,21 +126,30 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                 # detections = latest_detections if latest_detections is not None else []
                 logger.debug("Inference skipped: is_paused=%s, user_prompts=%s, is_on_visual_prompt=%s", is_paused, user_prompts, is_on_visual_prompt)
             try:
-                awod
                 sv_detections = sv.Detections(
                     xyxy=np.array(detections['xyxy'], dtype=np.float32),
                     mask=np.array(detections['mask'], dtype=bool) if detections['mask'] is not None else None,
                     confidence=np.array(detections['confidence'], dtype=np.float32),
                     class_id=np.array(detections['class_id'], dtype=np.int32),
-                    data={'class_names': user_prompts} if user_prompts else {}
+                    data={'class_names': detections['class_names']} if user_prompts else {}
                 )
+
+                # labels = [
+                #         f"{class_name}" for class_name in detections['class_names']
+                # ]
+
                 annotated_image = frame.copy()
                 annotated_image = sv.ColorAnnotator().annotate(scene=annotated_image, detections=sv_detections)
                 annotated_image = sv.BoxAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                # annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections, labels=labels)
                 annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections)
                 ret, buffer = cv2.imencode('.jpg', annotated_image, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                image_time = time.time()-response_time-start_time
             except Exception as o:
+                logger.info(f"Error {o}")
+                logger.info(detections)
                 ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                image_time = time.time()-response_time-start_time
 
             # Encode frame as JPEG for streaming
 
@@ -156,14 +167,18 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
             # Calculate elapsed time and adjust delay to maintain 24 FPS
             frame_count += 1
             elapsed_time = time.time() - frame_start_time
-            delay = max(0, FRAME_INTERVAL - elapsed_time)
-            time.sleep(delay)
+            # delay = max(0, FRAME_INTERVAL - elapsed_time)
+            # time.sleep(delay)
 
+            logger.info("response time: %s", response_time*1000)
+            logger.info("image time: %s", image_time*1000)
+            logger.info("total time: %s", elapsed_time*1000)
             # Log the actual frame rate every 24 frames (approximately every second at 24 FPS)
             if frame_count % 24 == 0:
                 total_time = time.time() - start_time
                 actual_fps = frame_count / total_time
-                logger.debug("Actual playback FPS: %s", actual_fps)
+
+                logger.info("Actual playback FPS: %s", actual_fps)
                 frame_count = 0
                 start_time = time.time()
 
