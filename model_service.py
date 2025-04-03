@@ -73,7 +73,9 @@ class ModelManager:
     def set_classes_without_vpe(self, classes):
         """Set classes without visual prompt embeddings."""
         # Ensure the predictor is set before setting classes
-        # self.model.set_classes(classes, self.model.get_text_pe(classes))
+        # self.model.predictor=YOLOEVPSegPredictor
+        self.model = YOLOE("yoloe-11l-seg.pt").cuda()
+        self.model.set_classes(classes, self.model.get_text_pe(classes))
         logger.debug("Classes set without vpe: %s", classes)
 
 # Instantiate the ModelManager

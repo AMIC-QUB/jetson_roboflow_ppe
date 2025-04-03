@@ -175,6 +175,17 @@ def clear_visual_prompts():
     inference.visual_prompts = None
     inference.is_on_visual_prompt = False  # Resume detections when clearing visual prompts
     # Reset the model's state using the model service
+    try:
+        response = requests.post(
+            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
+            json={"classes": inference.user_prompts}
+        )
+        if response.status_code != 200:
+            logger.error(f"Failed to clear visual prompts: {response.text}")
+            return jsonify({"error": f"Failed to clear visual prompts: {response.text}"}), 500
+    except Exception as e:
+        logger.error(f"Failed to clear visual prompts: {e}")
+        return jsonify({"error": f"Failed to clear visual prompts: {str(e)}"}), 500
     logger.info("Visual prompts cleared, model state reset, is_on_visual_prompt set to False")
     return jsonify({"status": "success"})
 
@@ -198,6 +209,17 @@ def update_prompts(prompts):
     inference.user_prompts = [p.strip() for p in inference.user_prompts]  # Clean up whitespace
     inference.last_results = None  # Reset last_results to avoid index mismatches
     # Reset the model's state using ModelManager
+    try:
+        response = requests.post(
+            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
+            json={"classes": inference.user_prompts}
+        )
+        if response.status_code != 200:
+            logger.error(f"Failed to update prompts: {response.text}")
+            return jsonify({"error": f"Failed to update prompts: {response.text}"}), 500
+    except Exception as e:
+        logger.error(f"Failed to update prompts: {e}")
+        return jsonify({"error": f"Failed to updte prompts: {str(e)}"}), 500
     logger.info(f"Updated prompts: {inference.user_prompts}, model state reset")
     return jsonify({"status": "success", "prompts": inference.user_prompts})
 
@@ -208,6 +230,18 @@ def clear_prompts():
     inference.last_results = None  # Reset last_results to avoid index mismatches
     inference.is_paused = not inference.is_paused  # Toggle pause state
     # Reset the model's state using ModelManager
+    # app.model_manager.set_classes_without_vpe(inference.user_prompts)
+    try:
+        response = requests.post(
+            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
+            json={"classes": inference.user_prompts}
+        )
+        if response.status_code != 200:
+            logger.error(f"Failed to clear prompts: {response.text}")
+            return jsonify({"error": f"Failed to clear prompts: {response.text}"}), 500
+    except Exception as e:
+        logger.error(f"Failed to clear prompts: {e}")
+        return jsonify({"error": f"Failed to clear prompts: {str(e)}"}), 500
     logger.info(f"Prompts cleared, pause state: {inference.is_paused}, model state reset")
     return jsonify({"status": "success", "paused": inference.is_paused, "prompts": inference.user_prompts})
 
