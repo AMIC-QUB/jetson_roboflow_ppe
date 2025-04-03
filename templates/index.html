@@ -7,28 +7,34 @@
   </head>
   <body>
     <h1>AMIC Construction PPE Detection</h1>
-    <div class="prompt-container">
-      <input
-        type="text"
-        id="prompt-input"
-        placeholder="Enter prompts (e.g., worker with helmet, heavy machinery)"
-      />
-      <button id="update-btn" onclick="updatePrompts()">Update Prompts</button>
-      <button id="clear-btn" onclick="clearPrompts()">Clear Prompts</button>
-      <button id="toggle-mode-btn" onclick="toggleDisplayMode()">Switch to Segmentation</button>
-      <button id="visual-prompt-btn" onclick="window.location.href='/visual_prompt'">Add Visual Prompt</button>
-      <button id="clear-visual-prompt-btn" onclick="clearVisualPrompts()">Clear Visual Prompts</button>
-      <span id="visual-prompt-status"></span>
-    </div>
     <div class="video-container">
-      <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed" />
+      <label for="video-input">Select Video File (optional):</label>
+      <input type="file" id="video-input" accept="video/*">
+      <button id="use-webcam-btn">Use Webcam</button>
+      <button id="use-video-btn" style="display: none;">Use Video</button>
+    </div>
+    <div class="container">
+      <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed">
       <canvas id="overlay-canvas"></canvas>
-      <img src="{{ url_for('static', filename='joint_logo.png') }}" class="logo" alt="AMIC Logo" />
+    </div>
+    <div class="controls">
+      <input type="text" id="prompt-input" placeholder="Enter prompts (comma-separated)" value="{{ ','.join(user_prompts) if user_prompts else '' }}">
+      <button id="update-btn">Update Prompts</button>
+      <button id="clear-btn">Clear Prompts</button>
+      <button id="toggle-mode-btn">Toggle Display Mode ({{ 'Segmentation' if show_segmentation else 'Bounding Boxes' }})</button>
+      <a href="{{ url_for('visual_prompt') }}">
+        <button id="visual-prompt-btn" {% if visual_prompts_active %}style="background-color: #ffcc00;"{% endif %}>
+          {% if visual_prompts_active %}Clear Visual Prompts{% else %}Set Visual Prompts{% endif %}
+        </button>
+      </a>
     </div>
     <div id="warning"></div>
     <script>
-      // Define visualPromptsActive as a global variable
-      window.visualPromptsActive = {{ visual_prompts_active | tojson }};
+      // Pass server-side variables to JavaScript
+      let userPrompts = {{ user_prompts | tojson }};
+      let isPaused = {{ is_paused | tojson }};
+      let showSegmentation = {{ show_segmentation | tojson }};
+      let usingVideo = {{ using_video | tojson }};
     </script>
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
   </body>

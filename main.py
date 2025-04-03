@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     # Start the detection thread, passing the get_frame function
     logger.info("Starting detection thread from main.py")
-    detection_thread = threading.Thread(target=process_detections, args=(get_frame,), daemon=True)
+    detection_thread = threading.Thread(target=process_detections, daemon=True)
     detection_thread.start()
     logger.info("Detection thread started")
     
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     # Run the Flask app
     logger.info("Starting Flask app on port 5000")
     try:
-        app.run(host="0.0.0.0", port=5000, debug=False)
+        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
     finally:
         # Ensure the camera is released when the app exits
         release_camera()

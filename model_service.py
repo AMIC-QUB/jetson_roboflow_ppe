@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI()
+class_colors = {}  # Dictionary to store consistent colors for each class
 
 # Model Manager class to encapsulate the YOLOE model
 class ModelManager:
@@ -66,7 +67,7 @@ class ModelManager:
                 )
         else:
             self.model.set_classes(user_prompts, self.model.get_text_pe(user_prompts))
-            results = self.model.predict(target_image, conf=0.6, verbose=False)
+            results = self.model.predict(target_image, conf=0.3, verbose=True)
         logger.debug("Inference completed, results: %s", len(results))
         return results
 
@@ -122,6 +123,7 @@ async def predict_with_visual_prompts(request: VisualPromptRequest):
 
 @app.post("/predict")
 async def predict(request: PredictRequest):
+    global class_colors
     try:
         # Decode the base64 image
         target_image = decode_base64_image(request.image_base64)
@@ -158,7 +160,7 @@ async def predict(request: PredictRequest):
                     "y2": int(xyxy[3]),
                     "class": label,
                     "confidence": conf,
-                    "color": (np.random.randint(0, 256), np.random.randint(0, 256), np.random.randint(0, 256)),
+                    "color": class_colors.setdefault(label, (np.random.randint(0, 256), np.random.randint(0, 256), np.random.randint(0, 256))),
                     "mask": mask_data
                 }
                 filtered_predictions.append(pred)

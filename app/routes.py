@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import requests
 import io
+
 # Set up logging
 logger = app.logger
 
@@ -18,13 +19,60 @@ def encode_image_to_base64(image):
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    """Render the main web page."""
+    """Render the main web page with option to use a video file."""
     logger.debug("Serving / endpoint")
     inference.is_on_visual_prompt = False  # Resume detections when on the main page
     logger.debug("is_on_visual_prompt set to False")
-    return render_template('index.html', visual_prompts_active=inference.visual_prompts is not None)
+
+    if request.method == 'POST':
+        # Handle video file upload
+        if 'video' not in request.files:
+            logger.error("No video file in request")
+            return jsonify({"error": "No video file provided"}), 400
+
+        file = request.files['video']
+        if file.filename == '':
+            logger.error("No selected file")
+            return jsonify({"error": "No selected file"}), 400
+
+        try:
+            # Save the video file
+            video_path = "/tmp/main_video.mp4"
+            file.save(video_path)
+            inference.stop_inference_thread()  # Stop the current inference thread
+            inference.video_file_path = video_path  # Store the video file path globally
+            inference.start_inference_thread()  # Start a new inference thread
+            logger.debug("Video file uploaded and stored at: %s", video_path)
+        except Exception as e:
+            logger.error(f"Exception while processing video file: {e}")
+            return jsonify({"error": f"Failed to process video file: {str(e)}"}), 500
+
+    # Reset video_file_path when switching back to webcam
+    if request.method == 'GET' and inference.video_file_path is not None:
+        inference.stop_inference_thread()  # Stop the current inference thread
+        inference.video_file_path = None
+        if inference.video_cap is not None:
+            inference.video_cap.release()
+            inference.video_cap = None
+        inference.start_inference_thread()  # Start a new inference thread
+        logger.debug("Switched back to webcam feed")
+
+    # Log the values being passed to the template
+    logger.debug("Template variables: user_prompts=%s, is_paused=%s, show_segmentation=%s, using_video=%s",
+                 inference.user_prompts, inference.is_paused, inference.show_segmentation,
+                 hasattr(inference, 'video_file_path') and inference.video_file_path is not None)
+
+    # Render the index page
+    return render_template(
+        'index.html',
+        visual_prompts_active=inference.visual_prompts is not None,
+        user_prompts=inference.user_prompts,
+        is_paused=inference.is_paused,
+        show_segmentation=inference.show_segmentation,
+        using_video=hasattr(inference, 'video_file_path') and inference.video_file_path is not None
+    )
 
 @app.route('/visual_prompt')
 def visual_prompt():
@@ -138,7 +186,7 @@ def process_visual_prompt():
         target_image_base64 = encode_image_to_base64(target_image)
         response = requests.post(
             f"{MODEL_SERVICE_URL}/predict",
-            json={"image_base64": target_image_base64}
+            json={"image_base64": target_image_base64, "user_prompts": inference.user_prompts}
         )
         if response.status_code != 200:
             logger.error(f"Failed to get inference results: {response.text}")
@@ -208,7 +256,7 @@ def update_prompts(prompts):
     inference.user_prompts = prompts.split(",")  # Split comma-separated prompts
     inference.user_prompts = [p.strip() for p in inference.user_prompts]  # Clean up whitespace
     inference.last_results = None  # Reset last_results to avoid index mismatches
-    # Reset the model's state using ModelManager
+    # Reset the model's state using the model service
     try:
         response = requests.post(
             f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
@@ -219,7 +267,7 @@ def update_prompts(prompts):
             return jsonify({"error": f"Failed to update prompts: {response.text}"}), 500
     except Exception as e:
         logger.error(f"Failed to update prompts: {e}")
-        return jsonify({"error": f"Failed to updte prompts: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to update prompts: {str(e)}"}), 500
     logger.info(f"Updated prompts: {inference.user_prompts}, model state reset")
     return jsonify({"status": "success", "prompts": inference.user_prompts})
 
@@ -229,8 +277,7 @@ def clear_prompts():
     inference.user_prompts = []  # Clear prompts
     inference.last_results = None  # Reset last_results to avoid index mismatches
     inference.is_paused = not inference.is_paused  # Toggle pause state
-    # Reset the model's state using ModelManager
-    # app.model_manager.set_classes_without_vpe(inference.user_prompts)
+    # Reset the model's state using the model service
     try:
         response = requests.post(
             f"{MODEL_SERVICE_URL}/set_classes_without_vpe",

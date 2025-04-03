@@ -1,9 +1,10 @@
 let detections = [];
-let showSegmentation = false;
 let canvas, ctx;
+let videoFeed;
+// let usingVideo = usingVideo || false;
 
 function initCanvas() {
-  const videoFeed = document.getElementById('video-feed');
+  videoFeed = document.getElementById('video-feed');
   canvas = document.getElementById('overlay-canvas');
   ctx = canvas.getContext('2d');
 
@@ -27,6 +28,28 @@ function initCanvas() {
     canvas.width = videoFeed.width;
     canvas.height = videoFeed.height;
   });
+  if (usingVideo) {
+    document.getElementById('use-webcam-btn').style.display = 'inline-block';
+    document.getElementById('use-video-btn').style.display = 'none';
+  } else {
+    document.getElementById('use-webcam-btn').style.display = 'none';
+    document.getElementById('use-video-btn').style.display = 'inline-block';
+  }
+
+  // Add event listeners for all buttons
+  document.getElementById('use-webcam-btn').addEventListener('click', useWebcam);
+  document.getElementById('use-video-btn').addEventListener('click', useVideo);
+  document.getElementById('update-btn').addEventListener('click', updatePrompts);
+  document.getElementById('clear-btn').addEventListener('click', clearPrompts);
+  document.getElementById('toggle-mode-btn').addEventListener('click', toggleDisplayMode);
+  document.getElementById('visual-prompt-btn').addEventListener('click', function(e) {
+    // Let the <a> tag handle navigation to /visual_prompt
+    // No additional JavaScript needed here
+  });
+  // Set initial button visibility based on usingVideo
+
+  // Event listener for video file selection
+  document.getElementById('video-input').addEventListener('change', handleVideoSelection);
 
   // Start polling for detections
   console.log("Starting to poll for detections");
@@ -43,6 +66,80 @@ function initCanvas() {
   if (window.visualPromptsActive) {
     document.getElementById('clear-visual-prompt-btn').style.display = "inline-block";
     document.getElementById('visual-prompt-status').textContent = "Visual Prompts Active";
+  }
+}
+
+// Handle video file selection
+function handleVideoSelection(event) {
+  const file = event.target.files[0];
+  if (file) {
+    const formData = new FormData();
+    formData.append('video', file);
+
+    fetch('/', {
+      method: 'POST',
+      body: formData
+    })
+    .then((response) => {
+      if (response.ok) {
+        usingVideo = true;
+        document.getElementById('use-webcam-btn').style.display = 'inline-block';
+        document.getElementById('use-video-btn').style.display = 'none';
+        // Add a slight delay to ensure the server is ready
+        setTimeout(() => {
+          videoFeed.src = '/video_feed?' + new Date().getTime();
+        }, 500);
+      } else {
+        response.json().then(data => {
+          document.getElementById('warning').textContent = data.error || 'Failed to upload video file';
+          document.getElementById('warning').style.display = "block";
+        });
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      document.getElementById('warning').textContent = 'Error uploading video file';
+      document.getElementById('warning').style.display = "block";
+    });
+  }
+}
+
+// Switch to webcam feed
+function useWebcam() {
+  usingVideo = false;
+  // Reset the video file path on the server by making a GET request to /
+  fetch('/', { method: 'GET' })
+    .then(response => {
+      if (response.ok) {
+        document.getElementById('use-webcam-btn').style.display = 'none';
+        document.getElementById('use-video-btn').style.display = 'inline-block';
+        // Add a slight delay to ensure the server is ready
+        setTimeout(() => {
+          videoFeed.src = '/video_feed?' + new Date().getTime();
+        }, 500);
+      } else {
+        document.getElementById('warning').textContent = 'Failed to switch to webcam';
+        document.getElementById('warning').style.display = "block";
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      document.getElementById('warning').textContent = 'Error switching to webcam';
+      document.getElementById('warning').style.display = "block";
+    });
+}
+
+// Switch to video file
+function useVideo() {
+  if (usingVideo) {
+    document.getElementById('use-webcam-btn').style.display = 'inline-block';
+    document.getElementById('use-video-btn').style.display = 'none';
+    // Add a slight delay to ensure the server is ready
+    setTimeout(() => {
+      videoFeed.src = '/video_feed?' + new Date().getTime();
+    }, 500);
+  } else {
+    alert("Please select a video file first.");
   }
 }
 
