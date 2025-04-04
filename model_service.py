@@ -36,6 +36,8 @@ class ModelManager:
             logger.info("YOLOE model loaded successfully in ModelManager")
             self.vp=False
             self.labels_set = False
+            self.tracker = sv.ByteTrack()
+
         except Exception as e:
             logger.error(f"Failed to load YOLOE model: {e}")
             raise
@@ -134,7 +136,9 @@ async def predict(request: PredictRequest):
         target_image = decode_base64_image(request.image_base64)
         results = model_manager.predict(target_image, request.user_prompts)
         sv_detections = sv.Detections.from_ultralytics(results[0])
-        
+        sv_detections = model_manager.tracker.update_with_detections(sv_detections)
+        logger.info(sv_detections.tracker_id.tolist())
+        logger.info(sv_detections.class_id.tolist())
         logger.info(f"Inference Internal: {(time.time() - start) * 1000}")
         return {
             "xyxy": sv_detections.xyxy.tolist(),
@@ -144,7 +148,8 @@ async def predict(request: PredictRequest):
             "class_names": [model_manager.model.names[class_id]
                             for class_id
                             in sv_detections.class_id
-]
+                        ],
+            "tracker_id": sv_detections.tracker_id.tolist(),
             # "mask": sv_detections.mask.tolist() if sv_detections.mask is not None else None
         }
     except Exception as e:

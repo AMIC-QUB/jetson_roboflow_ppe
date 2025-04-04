@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Global variables for inference
 latest_detections = []  # Store latest detections
-user_prompts = ["person", "spade", "hard hat", "digger", "machinery", "vest", "building", "robot", "truck", "car", "dirt"]  # Default prompts
+# user_prompts = ["person", "spade", "hard hat", "digger", "machinery", "vest", "building", "robot", "truck", "car", "dirt"]  # Default prompts
+user_prompts = ["person"]  # Default prompts
 class_colors = {}  # Dictionary to store consistent colors for each class
 frame_counter = 0  # Frame counter for running detections
 last_results = None  # Store the most recent results for reuse
@@ -34,7 +35,9 @@ NEGATIVE_CLASSES = {"worker without helmet"}
 GREEN = (0, 255, 0)  # Positive color
 RED = (0, 0, 255)    # Negative color
 CONFIDENCE_THRESHOLD = 0.25  # Adjusted for YOLOE
-
+box_annotator = sv.BoundingBoxAnnotator()
+label_annotator = sv.LabelAnnotator()
+trace_annotator = sv.TraceAnnotator()
 # Model service URL
 MODEL_SERVICE_URL = "http://localhost:8000"
 
@@ -133,16 +136,17 @@ def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> 
                     class_id=np.array(detections['class_id'], dtype=np.int32),
                     data={'class_names': detections['class_names']} if user_prompts else {}
                 )
-
+                sv_detections.tracker_id = np.array(detections['tracker_id'], dtype=np.int32)
                 # labels = [
                 #         f"{class_name}" for class_name in detections['class_names']
                 # ]
 
                 annotated_image = frame.copy()
                 annotated_image = sv.ColorAnnotator().annotate(scene=annotated_image, detections=sv_detections)
-                annotated_image = sv.BoxAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                annotated_image = box_annotator.annotate(scene=annotated_image, detections=sv_detections)
                 # annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections, labels=labels)
-                annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections)
+                annotated_image = label_annotator.annotate(scene=annotated_image, detections=sv_detections)
+                annotated_image = trace_annotator.annotate(scene=annotated_image, detections=sv_detections)
                 ret, buffer = cv2.imencode('.jpg', annotated_image, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                 image_time = time.time()-response_time-start_time
             except Exception as o:
