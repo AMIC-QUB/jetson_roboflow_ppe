@@ -1,0 +1,57 @@
+version: '3.8' # Use a recent version
+
+services:
+  inference-service:
+    build:
+      context: . # Build context is the directory containing this compose file
+      dockerfile: Dockerfile.inference # Specify the Dockerfile for this service
+    container_name: ppe-inference-service
+    ports:
+      - "8000:8000" # Map host port 8000 to container port 8000
+    volumes:
+      # Mount the local .env file into the container at /app/.env
+      - ./.env.inference:/app/.env.inference:ro # Read-only mount
+      # Mount the local models directory into the container at /app/models
+      - ./models:/app/models:ro # Read-only mount is safer if models aren't modified
+    environment:
+      # You can override or set additional non-secret env vars here if needed
+      - LOG_LEVEL=INFO # Example override
+      # Ensure the .env file is read by pydantic-settings in your FastAPI app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # Or 'all'
+              capabilities: [gpu] # Request GPU capabilities
+    restart: unless-stopped
+    # Add healthcheck if desired
+
+  web-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.flask
+    container_name: ppe-web-server
+    ports:
+      - "5000:5000" # Map host port 5000 to container port 5000
+    environment:
+      # Pass the URL for the inference service to the Flask container
+      # Uses the service name 'inference-service' defined above
+      - MODEL_SERVICE_URL=http://inference-service:8000
+      # Add any other environment variables needed by Flask
+      # - FLASK_ENV=production # Example
+    depends_on:
+      - inference-service # Start inference service first (doesn't guarantee readiness)
+    restart: unless-stopped
+    # volumes:
+      # Example: Mount logs if Flask logs to a file
+      # - ./flask_logs:/app/logs
+
+# Optional: Define the external network if needed, otherwise uses default bridge
+# networks:
+#  default:
+#    driver: bridge
+
+# Optional: Define named volumes if needed instead of host mounts
+# volumes:
+#  model_data:

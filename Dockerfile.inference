@@ -1,0 +1,50 @@
+# Use NVIDIA's CUDA-enabled base image matching your PyTorch/CUDA needs
+# Check Ultralytics/PyTorch docs for recommended CUDA versions. 11.8 is often good.
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="FastAPI Inference Service for YOLOE PPE Detection"
+
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC
+
+# Install essentials and cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-dev \
+    wget \
+    git \
+    # Add libgl1 if OpenCV needs it, but headless often avoids it
+    # libgl1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy FastAPI requirements first for layer caching
+COPY ./inference_service/requirements.txt /app/requirements.txt
+
+# Install Python dependencies for FastAPI/Inference
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the FastAPI application code
+# Assumes your code is in 'inference_service/' directory relative to build context
+COPY ./inference_service /app/inference_service
+
+# --- Model Handling ---
+# Option 1 (Recommended with Docker Compose): Models will be mounted via volume.
+# Ensure MODEL_PATHs in .env.inference point to the mount location (e.g., /app/models)
+# Option 2 (Alternative): Copy models into the image (uncomment below)
+# RUN mkdir /app/models
+# COPY ./models /app/models
+
+# Expose the port the FastAPI service will run on (defined in CMD/uvicorn)
+EXPOSE 8000
+
+# Command to run the FastAPI application using Uvicorn
+# Adjust module:app name if your file/variable is different
+# Use --host 0.0.0.0 to accept connections from outside the container
+# Use --port 8000 to match the EXPOSE instruction
+CMD ["uvicorn", "inference_service.main_two_models:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,12 @@
+# FastAPI Inference Service Requirements
+fastapi>=0.80
+uvicorn[standard]>=0.18 # Includes websockets etc.
+torch>=1.12 # Check compatibility with ultralytics/cuda
+torchvision>=0.13
+ultralytics>=8.0 # Or specific version
+supervision # Or supervision[desktop] if needed
+pydantic-settings>=1.0
+opencv-python-headless>=4.5 # Headless usually sufficient
+numpy>=1.19
+pillow>=9.0
+# Add any other specific libs used by main_two_models.py

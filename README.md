@@ -21,19 +21,27 @@ This project provides a web-based system for real-time monitoring of Personal Pr
 ## Architecture
 
 The system follows a microservice-like architecture:
+```mermaid 
+graph LR
+    subgraph "User Browser"
+        React["React Frontend"]
+    end
 
-+-----------------+      HTTP Requests      +-----------------+      HTTP API Calls       +-------------------------+
-| React Frontend  | <--------------------> |  Flask Web App  | <------------------------> | FastAPI Inference Service |
-| (Browser)       |      (Video Stream)     |  (Port 5000)    |      (e.g., /predict)      | (YOLOE Model - Port 8000) |
-+-----------------+                         +-----------------+                           +-------------------------+
-        |                                             |                                                |
-        | Displays annotated stream,                  | Serves Frontend Files,                         | Loads YOLOE model(s)
-        | Sends prompt updates/VP data                | Handles /video_feed endpoint,                  | Runs inference on images
-        |                                             | Manages webcam/video input,                    | Provides /predict_text,
-        |                                             | Calls Inference Service API                    | /predict_vp, /set_text_classes
-        |                                             |                                                | endpoints
+    subgraph "Web Server (Port 5000)"
+        Flask["Flask Web App"]
+    end
 
+    subgraph "Inference Server (Port 8000)"
+         %% Using quotes and keeping <br/> %%
+        FastAPI["FastAPI Inference Service <br/> (YOLOE Model)"]
+    end
 
+    React -- "HTTP Requests (Prompts, VP Data, etc)" --> Flask;
+    Flask -- "Serves React Files" --> React;
+    Flask -- "Serves Annotated /video_feed Stream" --> React;
+    Flask -- "API Calls (Predict Image, Set Prompts)" --> FastAPI;
+    FastAPI -- "Detection Results (JSON)" --> Flask;
+```
 1.  The **User** interacts with the **React Frontend** in their browser.
 2.  The **React Frontend** makes API calls to the **Flask Web App** (e.g., to update prompts, upload video, request visual prompt data).
 3.  The **Flask Web App** serves the static React files and handles the `/video_feed` stream.

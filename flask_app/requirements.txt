@@ -1,0 +1,11 @@
+# Flask Application Requirements
+Flask>=2.0
+requests>=2.25 # For calling FastAPI service
+numpy>=1.19 # Often used with image processing
+opencv-python-headless>=4.5 # For image resizing, encoding, annotation
+gunicorn>=20.0 # WSGI server for production
+
+# Add any other libraries directly used by
+# routes.py, inference.py (client-side part), camera.py, __init__.py
+# Pillow # Example: if used for image manipulation
+

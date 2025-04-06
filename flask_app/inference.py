@@ -1,12 +1,17 @@
 # ... (imports) ...
 import threading
 from collections import deque
+import os
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # --- Configuration (Move to Flask app config later) ---
-MODEL_SERVICE_URL = "http://localhost:8000" # Ensure this matches your FastAPI service
+
+# Get the FastAPI service URL from environment variable, with a default
+MODEL_SERVICE_URL = os.environ.get("MODEL_SERVICE_URL", "http://localhost:8000")
+logger.info(f"Using Model Service URL: {MODEL_SERVICE_URL}")
+
 
 # --- State Management (Using globals - be mindful of concurrency) ---
 latest_detections = deque(maxlen=1) # Use deque for thread-safe(ish) single item storage

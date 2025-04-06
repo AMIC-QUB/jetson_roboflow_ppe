@@ -1,0 +1,66 @@
+# Stage 1: Build React App
+FROM node:18-alpine as builder
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="Build stage for React frontend"
+
+WORKDIR /app/frontend
+
+# Copy package files and install dependencies
+COPY frontend/package.json frontend/yarn.lock ./
+# Use yarn if you use yarn.lock, otherwise use npm and package-lock.json
+RUN yarn install --frozen-lockfile
+
+# Copy the rest of the frontend source code
+COPY frontend/ /app/frontend/
+
+# Build the React application for production
+RUN yarn build
+# Output will be in /app/frontend/dist
+
+
+# Stage 2: Setup Flask Runtime Environment
+FROM python:3.10-slim
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="Flask web server for AMIC PPE Detection frontend (React)"
+
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    # Environment variable for the API URL (will be set by Docker Compose)
+    # Set a default for local testing if needed, but Compose will override
+    MODEL_SERVICE_URL="http://localhost:8000"
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    # Add libgstreamer/v4l-utils only if camera.py truly needs them inside container
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy Flask-specific requirements first for layer caching
+COPY ./flask_app/requirements.txt /app/requirements.txt
+
+# Install Python dependencies for Flask server
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the BUILT React frontend application output from the builder stage
+COPY --from=builder /app/frontend/dist /app/frontend/dist
+
+# Copy the Flask application code AFTER installing dependencies
+COPY ./flask_app /app/flask_app
+
+# Expose the port Flask will run on (defined in CMD)
+EXPOSE 5000
+
+# --- IMPORTANT ---
+# Ensure your Flask app (__init__.py) is configured to serve static files
+# from '/app/frontend/dist/assets' and the index.html from '/app/frontend/dist'
+# AND that it reads the MODEL_SERVICE_URL from the environment variable.
+
+# Command to run the Flask application using Gunicorn
+# Assumes your Flask 'app' object is created in 'flask_app/__init__.py'
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "120", "flask_app:app"]
