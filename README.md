@@ -22,16 +22,16 @@ This project provides a web-based system for real-time monitoring of Personal Pr
 
 The system follows a microservice-like architecture:
 
-+-----------------+ HTTP Requests +-----------------+ HTTP API Calls +-------------------------+
-| React Frontend | <--------------------> | Flask Web App | <------------------------> | FastAPI Inference Service |
-| (Browser) | (Video Stream) | (Port 5000) | (e.g., /predict) | (YOLOE Model - Port 8000) |
-+-----------------+ +-----------------+ +-------------------------+
-| | |
-| Displays annotated stream, | Serves Frontend Files, | Loads YOLOE model(s)
-| Sends prompt updates/VP data | Handles /video_feed endpoint, | Runs inference on images
-| | Manages webcam/video input, | Provides /predict_text,
-| | Calls Inference Service API | /predict_vp, /set_text_classes
-| | | endpoints
++-----------------+      HTTP Requests      +-----------------+      HTTP API Calls       +-------------------------+
+| React Frontend  | <--------------------> |  Flask Web App  | <------------------------> | FastAPI Inference Service |
+| (Browser)       |      (Video Stream)     |  (Port 5000)    |      (e.g., /predict)      | (YOLOE Model - Port 8000) |
++-----------------+                         +-----------------+                           +-------------------------+
+        |                                             |                                                |
+        | Displays annotated stream,                  | Serves Frontend Files,                         | Loads YOLOE model(s)
+        | Sends prompt updates/VP data                | Handles /video_feed endpoint,                  | Runs inference on images
+        |                                             | Manages webcam/video input,                    | Provides /predict_text,
+        |                                             | Calls Inference Service API                    | /predict_vp, /set_text_classes
+        |                                             |                                                | endpoints
 
 
 1.  The **User** interacts with the **React Frontend** in their browser.
