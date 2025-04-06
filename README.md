@@ -1,72 +1,89 @@
-# Real-Time Construction Site PPE Detection (YOLOE)
+# Real-Time Construction Site PPE Detection (YOLOE - Dockerized)
 
-This project provides a web-based system for real-time monitoring of Personal Protective Equipment (PPE) compliance on construction sites using the YOLOE object detection model. It features both text-based and interactive visual prompting for defining objects of interest.
 
-**Core Components:**
+This project provides a web-based system for real-time monitoring of Personal Protective Equipment (PPE) compliance on construction sites using the YOLOE object detection model. It features text-based and visual prompting, served via a modern web interface. This version is containerized using Docker and Docker Compose for simplified deployment and dependency management.
 
-1.  **FastAPI Inference Service:** Hosts the YOLOE model(s) and performs efficient object detection inference via API endpoints. Supports separate models for text and visual prompts.
-2.  **Flask Web Server:** Serves the frontend application, manages video input (webcam or file), handles user interactions (setting prompts), and communicates with the FastAPI service for inference results.
-3.  **React Frontend:** A modern, interactive user interface built with React, allowing users to view the annotated video stream, manage prompts, and interact with the visual prompting feature.
+
+**Core Components (Containerized):**
+
+1.  **`inference-service` (FastAPI):** A Docker container running a FastAPI application that hosts the YOLOE model(s) and performs efficient object detection inference via API endpoints. Supports separate models for text and visual prompts. Requires GPU access via NVIDIA Container Toolkit.
+2.  **`web-server` (Flask + React):** A Docker container running a Flask application that serves the built React frontend, manages video input (webcam or file), handles user interactions (setting prompts), and communicates with the `inference-service` for results.
+
 
 ## Features
 
+*   **Containerized Deployment:** Easily deployable using Docker Compose.
 *   **Real-Time Detection:** Processes video streams (webcam or uploaded file) to detect objects.
 *   **YOLOE Model:** Leverages the powerful YOLOE model for object detection/segmentation.
 *   **Text Prompts:** Define target object classes using text input (e.g., "person, hard hat, safety vest").
 *   **Visual Prompts:** Interactively draw bounding boxes on a frame to define specific objects visually.
 *   **Annotated Stream:** Displays the video feed with bounding boxes, class labels, confidence scores, and optional tracking IDs overlaid.
-*   **Web Interface:** User-friendly interface built with React for controlling prompts and viewing results.
-*   **Decoupled Architecture:** Separate services for inference and web serving allow for scalability and independent development.
+*   **Modern Web Interface:** User-friendly interface built with React for controlling prompts and viewing results.
+*   **Decoupled Architecture:** Separate services for inference and web serving allow for scalability and independent development, managed by Docker Compose.
 
-## Architecture
 
-The system follows a microservice-like architecture:
-```mermaid 
+## Architecture (Docker Compose)
+
+The system runs as two interconnected Docker containers:
+
+```mermaid
 graph LR
     subgraph "User Browser"
-        React["React Frontend"]
+        ReactClient[React Frontend Files]
     end
 
-    subgraph "Web Server (Port 5000)"
-        Flask["Flask Web App"]
+    subgraph "Host Machine"
+        subgraph "Docker Container: web-server (Port 5000)"
+            Flask[Flask Web App]
+        end
+        subgraph "Docker Container: inference-service (Port 8000 + GPU)"
+            FastAPI["FastAPI Inference Service  (YOLOE Model)"]
+        end
+        ModelsVolume[(Models Volume<br>mounted into<br>inference-service)]
     end
 
-    subgraph "Inference Server (Port 8000)"
-         %% Using quotes and keeping <br/> %%
-        FastAPI["FastAPI Inference Service <br/> (YOLOE Model)"]
-    end
+    ReactClient -- "HTTP Requests (Prompts, VP Data, etc)" --> Flask;
+    Flask -- "Serves React Files" --> ReactClient;
+    Flask -- "Serves Annotated /video_feed Stream" --> ReactClient;
 
-    React -- "HTTP Requests (Prompts, VP Data, etc)" --> Flask;
-    Flask -- "Serves React Files" --> React;
-    Flask -- "Serves Annotated /video_feed Stream" --> React;
-    Flask -- "API Calls (Predict Image, Set Prompts)" --> FastAPI;
+    Flask -- "API Calls (Predict, Set Prompts) <br> via Docker Network<br> (e.g., http://inference-service:8000)" --> FastAPI;
     FastAPI -- "Detection Results (JSON)" --> Flask;
+    FastAPI -- "Reads models" --> ModelsVolume;
 ```
-1.  The **User** interacts with the **React Frontend** in their browser.
-2.  The **React Frontend** makes API calls to the **Flask Web App** (e.g., to update prompts, upload video, request visual prompt data).
-3.  The **Flask Web App** serves the static React files and handles the `/video_feed` stream.
-4.  For inference, the **Flask Web App** (specifically its background thread) sends image data to the **FastAPI Inference Service** API endpoints (`/predict_text` or `/predict_vp`).
-5.  The **FastAPI Service** runs the YOLOE model and returns detection results (bounding boxes, classes, confidence, etc.) to Flask.
-6.  The **Flask Web App** receives the detections, annotates the video frame (using Supervision library), and sends the annotated frame via the `/video_feed` stream.
-7.  The **React Frontend** displays the annotated `/video_feed`.
+
+1. The user accesses the React Frontend served by the Flask container (web-server) at http://localhost:5000.
+
+2. User actions (setting prompts, uploading video, submitting visual prompts) trigger API calls from React to the Flask container.
+
+3. The Flask container handles video input and the /video_feed streaming endpoint.
+
+4. For inference, Flask makes API calls (e.g., http://inference-service:8000/predict_text) over the Docker network to the FastAPI container (inference-service).
+
+5. The FastAPI container accesses the GPU (via NVIDIA Container Toolkit) and mounted model files to perform inference.
+
+6. Detection results (JSON) are sent back from FastAPI to Flask.
+
+7. Flask annotates the video frame and streams it via /video_feed back to the React frontend.
 
 ## Technology Stack
 
 *   **Backend:** Python
     *   **Inference Service:** FastAPI, Uvicorn, Ultralytics YOLOE, Supervision, PyTorch, Pydantic
-    *   **Web Server:** Flask, Requests
+    *   **Web Server:** Flask, Requests, Gunicorn
 *   **Frontend:** JavaScript, React, Vite (build tool), CSS
 *   **Machine Learning:** YOLOE (Ultralytics implementation)
-*   **Environment:** Python Virtual Environments, Node.js/npm (or yarn)
+*   **Containerization:** Docker, Docker Compose
+*   **GPU Support:** NVIDIA Container Toolkit
 
 ## Setup and Installation
 
 **Prerequisites:**
 
-*   Python 3.8+
-*   Node.js 16+ and npm (or yarn)
-*   Git
-*   **GPU with CUDA:** Strongly recommended for acceptable inference performance. Ensure you have compatible NVIDIA drivers and CUDA Toolkit installed if using GPU.
+*   **Docker Engine:** Install Docker for your operating system.
+*   **Docker Compose:** Usually included with Docker Desktop. Verify with `docker compose version`.
+*   **Git:** For cloning the repository.
+*   **NVIDIA GPU & Drivers:** A CUDA-enabled NVIDIA GPU is required for the inference service.
+*   **NVIDIA Container Toolkit:** Essential for Docker to access the GPU. Install following the official NVIDIA documentation for your OS: [NVIDIA Container Toolkit Installation Guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). **Restart the Docker daemon/service after installation.**
 
 **Steps:**
 
@@ -76,101 +93,81 @@ graph LR
     cd <your-repository-name>
     ```
 
-2.  **Setup FastAPI Inference Service:**
-    *   Navigate to the FastAPI service directory (e.g., `cd inference_service` - *adjust if named differently*).
-    *   Create and activate a Python virtual environment:
-        ```bash
-        python -m venv venv
-        source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-        ```
-    *   Install Python dependencies:
-        ```bash
-        pip install -r requirements.txt # Ensure this file exists in the service dir
-        ```
-    *   **Download YOLOE Model:** Download the required YOLOE model weights file (e.g., `yoloe-l-seg.pt`). Place it in a location accessible by the service (e.g., within the service directory).
-    *   **Configuration:** Create a `.env` file in the service directory based on the configuration settings (see `main_two_models.py` or similar):
+2.  **Download YOLOE Models:**
+    *   Obtain the necessary YOLOE model weights (`.pt` files) you intend to use (e.g., `yoloe-l-seg.pt`).
+    *   Place these model files inside the `models/` directory in the project root.
+
+3.  **Configure Inference Service:**
+    *   Create the `.env.inference` file in the project root (alongside `docker-compose.yml`).
+    *   Populate it with the correct paths *relative to the mount point inside the container* and other settings:
         ```env
-        # Example .env for FastAPI service
-        TEXT_MODEL_PATH=yoloe-l-seg.pt
-        VP_MODEL_PATH=yoloe-l-seg.pt # Can be the same or different
-        DEVICE=cuda # or cpu
+        # .env.inference EXAMPLE
+        TEXT_MODEL_PATH=/app/models/yoloe-l-seg.pt # Adjust filename if different
+        VP_MODEL_PATH=/app/models/yoloe-l-seg.pt  # Adjust filename if different
+        DEVICE=cuda
         DEFAULT_CONFIDENCE=0.3
         LOG_LEVEL=INFO
         PORT=8000
+        HOST=0.0.0.0
         ```
-        *Adjust `*_MODEL_PATH` to the actual path of your downloaded model file.*
+## Configuration Summary
 
-3.  **Setup Flask Web Server & React Frontend:**
-    *   Navigate back to the main project directory (or the directory containing the Flask app module).
-    *   Create and activate a *separate* Python virtual environment for Flask:
+*   **Inference Service (`.env.inference`):**
+    *   `*_MODEL_PATH`: **Must point to `/app/models/your_model.pt`**. These are the paths *inside* the container where the `models` directory is mounted.
+    *   `DEVICE`: Set to `cuda`.
+    *   `DEFAULT_CONFIDENCE`: Adjust detection threshold.
+    *   `LOG_LEVEL`: Controls FastAPI logging verbosity.
+*   **Web Server (`docker-compose.yml` environment section for `web-server`):**
+    *   `MODEL_SERVICE_URL`: Automatically set by Docker Compose to `http://inference-service:8000`, allowing Flask to find the FastAPI container by its service name.
+*   **React Build:** Handled automatically during the `web-server` image build process defined in `Dockerfile.flask`.
+
+
+4.  **Build and Run with Docker Compose:**
+    *   Open a terminal in the project's root directory (where `docker-compose.yml` is located).
+    *   Run the following command:
         ```bash
-        python -m venv venv_flask
-        source venv_flask/bin/activate # On Windows use `venv_flask\Scripts\activate`
+        docker compose up --build
         ```
-    *   Install Flask Python dependencies:
-        ```bash
-        pip install -r requirements.txt # Ensure this file exists for Flask deps
-        ```
-    *   Navigate to the React frontend directory (e.g., `cd frontend`).
-    *   Install Node.js dependencies:
-        ```bash
-        npm install
-        # OR: yarn install
-        ```
-    *   **Build the React App:** Create the optimized production build.
-        ```bash
-        npm run build
-        # OR: yarn build
-        ```
-        This will create a `dist` folder inside `frontend` containing `index.html` and static assets. The Flask app is configured to serve files from this `dist` directory.
+        *   `--build`: Builds the images for both services based on their Dockerfiles. Required on first run or after changes to Dockerfiles or application code/dependencies.
+        *   `-d`: (Optional) Add `-d` to run the containers in detached mode (in the background): `docker compose up --build -d`.
+    *   This command will:
+        *   Build the `frontend` React app (as part of the `Dockerfile.flask` build process).
+        *   Build the Docker images for `inference-service` and `web-server`.
+        *   Create and start containers for both services.
+        *   Mount the `models` directory and `.env.inference` file into the `inference-service` container.
+        *   Set up the Docker network for communication between containers.
+
 
 ## Running the Application
 
-You need to run both the FastAPI service and the Flask web server.
+1.  **Start Containers:** Use `docker compose up --build` (or `docker compose up` if images are already built).
+2.  **Access the Web Interface:** Open your web browser and navigate to `http://localhost:5000`.
+3.  **Monitor Logs:** View combined logs in the terminal where you ran `docker compose up`. If running detached (`-d`), use `docker compose logs -f` to follow logs.
+4.  **Stop Containers:** Press `Ctrl+C` in the terminal (if running attached) or run `docker compose down` (stops and removes containers).
 
-1.  **Start the FastAPI Inference Service:**
-    *   Navigate to the FastAPI service directory.
-    *   Activate its virtual environment (`source venv/bin/activate`).
-    *   Run Uvicorn (adjust `main_two_models:app` if your file/app variable is named differently):
-        ```bash
-        uvicorn main_two_models:app --host 0.0.0.0 --port 8000
-        ```
-    *   Keep this terminal running. You should see logs indicating the models are loading.
-
-2.  **Start the Flask Web Server:**
-    *   Navigate to the main project directory (where the Flask app module/`__init__.py` is).
-    *   Activate the Flask virtual environment (`source venv_flask/bin/activate`).
-    *   Run Flask (adjust `your_flask_app_module:app` if needed):
-        ```bash
-        # Development server (easier for testing)
-        flask run --host 0.0.0.0 --port 5000
-
-        # OR Production server (using Gunicorn)
-        # pip install gunicorn
-        # gunicorn 'your_flask_app_module:app' -b 0.0.0.0:5000 --workers 2 --threads 4 # Adjust workers/threads
-        ```
-    *   Keep this terminal running.
-
-3.  **Access the Application:**
-    *   Open your web browser and navigate to the Flask server's address: `http://localhost:5000` (or your server's IP address if running remotely).
-
-## Configuration
-
-*   **FastAPI Service:** Configure model paths, device (`cuda`/`cpu`), confidence threshold, and logging level via the `.env` file in the FastAPI service directory.
-*   **Flask Web Server:**
-    *   The URL for the FastAPI service (`MODEL_SERVICE_URL`) might be hardcoded or configurable within the Flask app (e.g., using environment variables or `app.config`). Check `inference.py` or `routes.py`.
-    *   The paths to the React build output (`frontend/dist`) are configured in the Flask app's `__init__.py`. Adjust if your directory structure differs.
 
 ## Troubleshooting
 
-*   **`CUDA out of memory`:** You may be trying to load models that are too large for your GPU VRAM. Try smaller model variants or run on `cpu` (slower). Ensure only one instance of the FastAPI service is running.
-*   **`Model file not found`:** Verify the `*_MODEL_PATH` in the FastAPI `.env` file points correctly to your downloaded `.pt` file.
-*   **React App Not Loading (404 errors in browser console):**
-    *   Ensure you ran `npm run build` in the `frontend` directory.
-    *   Verify the `REACT_DIST_FOLDER` and `REACT_STATIC_FOLDER` paths in Flask's `__init__.py` are correct relative to the Flask app's location.
-    *   Check that the Flask catch-all route is correctly serving `index.html`.
-*   **Connection Errors (Flask to FastAPI):** Ensure the FastAPI service is running and accessible from the Flask server. Check firewalls and that the `MODEL_SERVICE_URL` (default `http://localhost:8000`) in Flask points to the correct address/port of the FastAPI service.
-*   **Dependency Issues:** Make sure all dependencies in `requirements.txt` (for both services) and `package.json` (for frontend) are installed correctly in their respective environments.
+*   **`docker compose up` fails:**
+    *   Check Docker daemon is running.
+    *   Verify `docker-compose.yml` syntax.
+    *   Check Dockerfile build logs for errors (dependency installation, file copying).
+*   **GPU Issues / CUDA Errors in `inference-service`:**
+    *   Verify NVIDIA drivers are installed correctly on the host.
+    *   Ensure **NVIDIA Container Toolkit** is installed and the Docker daemon was restarted.
+    *   Check `inference-service` logs (`docker compose logs inference-service`) for CUDA-specific errors.
+    *   Confirm the `deploy.resources.reservations.devices` section in `docker-compose.yml` is correctly requesting the GPU.
+*   **Model Not Found in `inference-service`:**
+    *   Verify model files exist in the local `models/` directory before running `docker compose up`.
+    *   Double-check that `*_MODEL_PATH` in `.env.inference` uses the `/app/models/` prefix and correct filenames.
+    *   Check `inference-service` logs for file path errors during model loading.
+*   **Cannot Connect from Flask to FastAPI (Connection Refused/Timeout):**
+    *   Ensure `inference-service` container started successfully (`docker ps`, `docker compose logs inference-service`).
+    *   Verify the `MODEL_SERVICE_URL` environment variable is correctly set to `http://inference-service:8000` in the `web-server` container (`docker compose exec web-server printenv MODEL_SERVICE_URL`).
+    *   Check Docker network connectivity (usually handled automatically by Compose).
+*   **React App Not Loading/Showing Errors:**
+    *   Check Flask (`web-server`) logs for errors serving files (`docker compose logs web-server`).
+    *   Check the browser's developer console (F12) for JavaScript errors or failed network requests (404s for assets). Ensure the React build completed successfully during the Docker build.
 
 
 <!-- # jetson_roboflow_ppe
