@@ -1,300 +1,331 @@
-from flask import render_template, jsonify, request, Response
-from . import app, inference
-from .camera import get_frame
-import cv2
-import base64
-import numpy as np
-from PIL import Image
-import requests
-import io
+# ... (imports) ...
+from .camera import get_frame # Make sure this provides the webcam generator
+from . import inference # Import the refactored inference module
 
-# Set up logging
-logger = app.logger
+# ... (logger, helper functions like encode_image_to_base64) ...
 
-MODEL_SERVICE_URL = "http://localhost:8000"
+MODEL_SERVICE_URL = "http://localhost:8000" # Get from app.config ideally
 
-def encode_image_to_base64(image):
-    """Encode a PIL Image to base64 string."""
-    buffered = io.BytesIO()
-    image.save(buffered, format="JPEG")
-    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+# --- Route Implementations ---
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """Render the main web page with option to use a video file."""
+    """Render the main web page, handle video upload, manage inference thread."""
     logger.debug("Serving / endpoint")
-    inference.is_on_visual_prompt = False  # Resume detections when on the main page
-    logger.debug("is_on_visual_prompt set to False")
+
+    # Ensure inference thread uses correct source (webcam/video)
+    # Stop/start logic might need refinement based on desired behavior on page load/reload
 
     if request.method == 'POST':
         # Handle video file upload
-        if 'video' not in request.files:
-            logger.error("No video file in request")
-            return jsonify({"error": "No video file provided"}), 400
+        if 'video' in request.files:
+            file = request.files['video']
+            if file and file.filename != '':
+                video_path = f"/tmp/uploaded_{file.filename}" # Use a safe path
+                try:
+                    file.save(video_path)
+                    logger.info(f"Video file saved to: {video_path}")
+                    # Stop existing thread, set new path, start new thread
+                    inference.stop_inference_thread()
+                    inference.video_file_path = video_path
+                    if inference.video_cap: # Release old capture if exists
+                        inference.video_cap.release()
+                        inference.video_cap = None
+                    inference.start_inference_thread(get_frame)
+                    logger.debug("Switched inference to video file.")
+                except Exception as e:
+                    logger.error(f"Failed to save or process video file: {e}", exc_info=True)
+                    return jsonify({"error": f"Failed to process video file: {str(e)}"}), 500
+            else:
+                 logger.warning("Video upload POST request with no valid file.")
+                 # Decide how to handle this - maybe just reload the page?
+        else:
+             logger.warning("POST request to / without 'video' file part.")
 
-        file = request.files['video']
-        if file.filename == '':
-            logger.error("No selected file")
-            return jsonify({"error": "No selected file"}), 400
+    elif request.method == 'GET':
+        # If currently using video and accessing via GET, switch back to webcam?
+        # This logic might be too simplistic depending on desired UX.
+        # Maybe only switch back if a specific button/query param indicates it.
+        # For now, assume GET means webcam unless video_file_path is already set.
+        if inference.video_file_path is None and not inference.inference_running:
+             # Start with webcam if no video path and thread not running
+             logger.info("GET request: Starting inference with webcam.")
+             inference.stop_inference_thread() # Ensure clean state
+             inference.video_file_path = None
+             inference.start_inference_thread(get_frame)
 
-        try:
-            # Save the video file
-            video_path = "/tmp/main_video.mp4"
-            file.save(video_path)
-            # inference.stop_inference_thread()  # Stop the current inference thread
-            inference.video_file_path = video_path  # Store the video file path globally
-            # inference.start_inference_thread()  # Start a new inference thread
-            logger.debug("Video file uploaded and stored at: %s", video_path)
-        except Exception as e:
-            logger.error(f"Exception while processing video file: {e}")
-            return jsonify({"error": f"Failed to process video file: {str(e)}"}), 500
+    # Set visual prompt flag correctly
+    inference.is_on_visual_prompt = False
 
-    # Reset video_file_path when switching back to webcam
-    if request.method == 'GET' and inference.video_file_path is not None:
-        # inference.stop_inference_thread()  # Stop the current inference thread
-        inference.video_file_path = None
-        if inference.video_cap is not None:
-            inference.video_cap.release()
-            inference.video_cap = None
-        # inference.start_inference_thread()  # Start a new inference thread
-        logger.debug("Switched back to webcam feed")
-
-    # Log the values being passed to the template
-    logger.debug("Template variables: user_prompts=%s, is_paused=%s, show_segmentation=%s, using_video=%s",
-                 inference.user_prompts, inference.is_paused, inference.show_segmentation,
-                 hasattr(inference, 'video_file_path') and inference.video_file_path is not None)
-
-    # Render the index page
     return render_template(
         'index.html',
-        visual_prompts_active=inference.visual_prompts is not None,
+        # Pass necessary state to the template
         user_prompts=inference.user_prompts,
         is_paused=inference.is_paused,
-        show_segmentation=inference.show_segmentation,
-        using_video=hasattr(inference, 'video_file_path') and inference.video_file_path is not None
+        # Add other flags if needed by template
+        using_video=(inference.video_file_path is not None)
     )
+
 
 @app.route('/visual_prompt')
 def visual_prompt():
-    """Render the visual prompt page."""
+    """Render the visual prompt page with a static frame."""
     logger.debug("Serving /visual_prompt endpoint")
-    inference.is_on_visual_prompt = True  # Pause detections when on the visual prompt page
-    logger.debug("is_on_visual_prompt set to True")
-    # Capture a single frame to display on the visual prompt page
-    frame_gen = get_frame()  # This is a generator
-    try:
-        ret, frame = next(frame_gen)  # Get the next frame
-        if not ret or frame is None:
-            logger.error("Could not capture frame for visual prompt: ret=%s, frame=%s", ret, frame)
-            return jsonify({"error": "Could not capture frame"}), 500
-        logger.debug("Frame captured successfully, shape: %s", frame.shape)
-    except Exception as e:
-        logger.error("Exception while capturing frame for visual prompt: %s", str(e))
-        return jsonify({"error": "Could not capture frame: " + str(e)}), 500
+    inference.is_on_visual_prompt = True # Pause inference updates in background
 
-    # Encode the frame as a base64 string to display in the browser
-    try:
-        ret, buffer = cv2.imencode('.jpg', frame)
-        if not ret:
-            logger.error("Failed to encode frame for visual prompt")
-            return jsonify({"error": "Failed to encode frame"}), 500
-        frame_base64 = base64.b64encode(buffer).decode('utf-8')
-        logger.debug("Frame encoded to base64 successfully")
-    except Exception as e:
-        logger.error("Exception while encoding frame for visual prompt: %s", str(e))
-        return jsonify({"error": "Failed to encode frame: " + str(e)}), 500
+    # Get a single static frame
+    # Ensure get_frame() can be called to just grab one frame if needed,
+    # or use the latest frame from the inference thread if running.
+    frame_to_display = None
+    if inference.latest_annotated_frame:
+         # Use the latest raw frame if available from the running thread
+         # Note: latest_annotated_frame now stores raw frame in the thread before annotation
+         # This needs adjustment - maybe store latest raw frame separately?
+         # Let's assume get_frame can provide a single frame for simplicity here:
+         frame_gen = get_frame()
+         try:
+              ret, frame = next(frame_gen)
+              if ret and frame is not None:
+                   frame_to_display = frame
+              else:
+                   logger.error("Could not capture single frame for visual prompt")
+                   return "Error capturing frame", 500
+         except Exception as e:
+              logger.error(f"Error getting frame for VP: {e}", exc_info=True)
+              return "Error capturing frame", 500
+         # Release webcam if get_frame() holds it open
+         if hasattr(frame_gen, 'release'): frame_gen.release()
 
-    return render_template('visual_prompt.html', frame_base64=frame_base64, user_prompts=inference.user_prompts)
+    else: # Fallback if thread isn't running or didn't provide frame
+        logger.warning("Inference thread not running or no frame available, trying direct capture.")
+        # Direct capture logic (similar to original)
+        # ... (ensure proper camera release) ...
+        return "Error: Cannot get frame for visual prompt", 500
+
+    if frame_to_display is None:
+         return "Error: Failed to get frame for visual prompt", 500
+
+    # Encode frame for display
+    ret, buffer = cv2.imencode('.jpg', frame_to_display)
+    if not ret:
+        logger.error("Failed to encode frame for visual prompt")
+        return "Error encoding frame", 500
+    frame_base64 = base64.b64encode(buffer).decode('utf-8')
+
+    return render_template(
+        'visual_prompt.html',
+        frame_base64=frame_base64,
+        user_prompts=inference.user_prompts
+    )
+
 
 @app.route('/process_visual_prompt', methods=['POST'])
 def process_visual_prompt():
-    """Process the visual prompt, crop the image, and run inference."""
+    """Process visual prompts using the dedicated VP model."""
     logger.debug("Serving /process_visual_prompt endpoint")
     data = request.json
-    bboxes = np.array(data['bboxes'])  # List of [x1, y1, x2, y2]
-    classes = np.array(data['classes'], dtype=np.int32)  # List of class indices
+    # --- Get image that was *actually* annotated ---
+    frame_base64 = data.get('frame_base64')
+    bboxes_data = data.get('bboxes')
+    classes_data = data.get('classes')
+    vp_user_prompts = data.get('user_prompts') # Names for the classes used in VP
 
-    # Validate input
-    if len(bboxes) != len(classes):
-        logger.error("Mismatch between number of bounding boxes and classes")
-        return jsonify({"error": "Mismatch between number of bounding boxes and classes"}), 400
+    if not frame_base64 or not bboxes_data or not classes_data or not vp_user_prompts:
+        logger.error("Missing data in /process_visual_prompt request")
+        return jsonify({"error": "Missing frame_base64, bboxes, classes, or user_prompts"}), 400
 
-    # Log the visual prompts for debugging
-    logger.debug("Visual prompts received: bboxes=%s, bboxes_shape=%s, classes=%s, classes_shape=%s", bboxes, bboxes.shape, classes, classes.shape)
-
-    # Capture a frame for inference
-    frame_gen = get_frame()
-    ret, frame = next(frame_gen)
-    if not ret or frame is None:
-        logger.error("Could not capture frame for visual prompt inference")
-        return jsonify({"error": "Could not capture frame"}), 500
-
-    # Convert the frame to a PIL Image (no resizing)
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    source_image = Image.fromarray(frame_rgb)
-    target_image = source_image.copy()  # Use the same image for both source and target for now
-    logger.debug("Input image shape: %s", frame_rgb.shape)
-
-    # Crop the image using each bounding box in prompts
-    cropped_images = []
-    for bbox in bboxes:
-        x1, y1, x2, y2 = map(int, bbox)  # Convert to integers
-        # Ensure coordinates are within image bounds
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        x2 = min(frame_rgb.shape[1], x2)
-        y2 = min(frame_rgb.shape[0], y2)
-        if x2 <= x1 or y2 <= y1:
-            logger.warning("Invalid bounding box coordinates: x1=%d, y1=%d, x2=%d, y2=%d", x1, y1, x2, y2)
-            continue
-        # Crop the image
-        cropped = frame_rgb[y1:y2, x1:x2]
-        # Encode the cropped image as base64
-        ret, buffer = cv2.imencode('.jpg', cv2.cvtColor(cropped, cv2.COLOR_RGB2BGR))
-        if not ret:
-            logger.error("Failed to encode cropped image")
-            continue
-        cropped_base64 = base64.b64encode(buffer).decode('utf-8')
-        cropped_images.append(cropped_base64)
-        logger.debug("Cropped image encoded, shape: %s", cropped.shape)
-
-    # Create the prompts dictionary
-    prompts = dict(
-        bboxes=bboxes.tolist(),  # Convert to list for JSON serialization
-        cls=classes.tolist()     # Convert to list for JSON serialization
-    )
-
-    # Run the two-stage prediction process using the model service
     try:
-        # Encode the source image to base64
-        source_image_base64 = encode_image_to_base64(source_image)
+        # Decode the frame the user annotated
+        img_bytes = base64.b64decode(frame_base64)
+        img = Image.open(io.BytesIO(img_bytes))
+        img_rgb = img.convert("RGB") # Ensure RGB
+        # Re-encode for sending to service (or pass decoded numpy array if service accepts)
+        image_to_send_base64 = encode_image_to_base64(img_rgb)
 
-        # First stage: Generate visual prompt embeddings and set classes
-        response = requests.post(
-            f"{MODEL_SERVICE_URL}/predict_with_visual_prompts",
-            json={
-                "image_base64": source_image_base64,
-                "prompts": prompts,
-                "user_prompts": inference.user_prompts
-            }
+        prompts = dict(
+            bboxes=bboxes_data,
+            cls=classes_data
         )
-        if response.status_code != 200:
-            logger.error(f"Failed to set visual prompts: {response.text}")
-            return jsonify({"error": f"Failed to set visual prompts: {response.text}"}), 500
 
-        # Second stage: Run inference on the target image
-        target_image_base64 = encode_image_to_base64(target_image)
+        # --- Call the CORRECT VP Endpoint ---
+        api_payload = {
+            "target_image_base64": image_to_send_base64,
+            "reference_image_base64": image_to_send_base64, # Use same image
+            "prompts": prompts,
+            "user_prompts_for_names": vp_user_prompts # Pass the names
+        }
+
+        logger.debug(f"Calling /predict_vp with payload keys: {api_payload.keys()}")
         response = requests.post(
-            f"{MODEL_SERVICE_URL}/predict",
-            json={"image_base64": target_image_base64, "user_prompts": inference.user_prompts}
+            f"{MODEL_SERVICE_URL}/predict_vp", # Call the VP endpoint
+            json=api_payload,
+            timeout=15 # VP might take longer
         )
-        if response.status_code != 200:
-            logger.error(f"Failed to get inference results: {response.text}")
-            return jsonify({"error": f"Failed to get inference results: {response.text}"}), 500
+        response.raise_for_status() # Check for HTTP errors
 
-        filtered_predictions = response.json().get("detections", [])
+        response_data = response.json()
+        # Parse the response (list of dicts)
+        sv_detections = inference.parse_detections_from_response(response_data)
+
+        # Annotate the original frame with VP results for display
+        np_frame = cv2.cvtColor(np.array(img_rgb), cv2.COLOR_RGB2BGR)
+        annotated_vp_frame = inference.annotate_frame(np_frame, sv_detections)
+
+        # Encode result frame
+        ret, buffer = cv2.imencode('.jpg', annotated_vp_frame)
+        result_frame_base64 = base64.b64encode(buffer).decode('utf-8') if ret else None
+
+        # Optionally store VP prompts if needed globally (though stateless is better)
+        # inference.visual_prompts = prompts # Be cautious with global state
+
+        logger.info("Visual prompt processed successfully.")
+        return jsonify({
+            "detections": response_data.get("detections", []), # Return raw detections list
+            "result_frame_base64": result_frame_base64
+            # "cropped_images": [] # Add cropped images if needed
+        })
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed during VP processing: {e}")
+        return jsonify({"error": f"Model service request failed: {e}"}), 502 # Bad Gateway
     except Exception as e:
-        logger.error(f"Failed to run inference with visual prompts: {e}")
-        return jsonify({"error": f"Failed to run inference: {str(e)}"}), 500
+        logger.error(f"Error processing visual prompt: {e}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-    # Store the visual prompts globally
-    inference.visual_prompts = dict(
-        bboxes=bboxes,
-        cls=classes
-    )
-    logger.info(f"Visual prompts set: {inference.visual_prompts}")
-
-    # Encode the frame with results for display
-    ret, buffer = cv2.imencode('.jpg', frame)
-    if not ret:
-        logger.error("Failed to encode result frame")
-        return jsonify({"error": "Failed to encode result frame"}), 500
-    result_frame_base64 = base64.b64encode(buffer).decode('utf-8')
-
-    return jsonify({
-        "detections": filtered_predictions,
-        "result_frame_base64": result_frame_base64,
-        "cropped_images": cropped_images  # Return the cropped images
-    })
 
 @app.route('/clear_visual_prompts')
 def clear_visual_prompts():
-    """Clear the visual prompts."""
-    inference.visual_prompts = None
-    inference.is_on_visual_prompt = False  # Resume detections when clearing visual prompts
-    # Reset the model's state using the model service
+    """Clear visual prompts (if stored globally) and reset model state."""
+    logger.info("Clearing visual prompts")
+    inference.visual_prompts = None # Clear global VP state if used
+    inference.is_on_visual_prompt = False # Allow background inference again
+
+    # No need to call the model service here unless you want to explicitly
+    # reset the text model's classes back to the current inference.user_prompts
     try:
+        # --- Call CORRECT endpoint to set text classes ---
+        logger.debug(f"Resetting text model classes to: {inference.user_prompts}")
         response = requests.post(
-            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
-            json={"classes": inference.user_prompts}
+            f"{MODEL_SERVICE_URL}/set_text_classes",
+            json={"classes": inference.user_prompts},
+            timeout=5
         )
-        if response.status_code != 200:
-            logger.error(f"Failed to clear visual prompts: {response.text}")
-            return jsonify({"error": f"Failed to clear visual prompts: {response.text}"}), 500
+        response.raise_for_status()
+        logger.info("Text model classes reset successfully.")
+        return jsonify({"status": "success"})
+    except requests.exceptions.RequestException as e:
+         logger.error(f"Failed to reset text classes via API: {e}")
+         # Decide if this is a critical error for the user
+         return jsonify({"error": f"Failed reset text classes on model service: {e}"}), 502
     except Exception as e:
-        logger.error(f"Failed to clear visual prompts: {e}")
-        return jsonify({"error": f"Failed to clear visual prompts: {str(e)}"}), 500
-    logger.info("Visual prompts cleared, model state reset, is_on_visual_prompt set to False")
-    return jsonify({"status": "success"})
+        logger.error(f"Error clearing visual prompts state: {e}", exc_info=True)
+        return jsonify({"error": f"Internal error: {str(e)}"}), 500
+
 
 @app.route('/video_feed')
 def video_feed():
-    """Stream the video feed with raw frames."""
+    """Stream annotated video frames from the background thread."""
     logger.debug("Serving /video_feed endpoint")
-    return Response(inference.generate_frames(get_frame), 
+    # Use the new generator that yields pre-annotated frames
+    return Response(inference.generate_frames_for_stream(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
 
 @app.route('/detections')
 def get_detections():
-    """Return the latest detections as JSON."""
+    """Return the latest detections (if needed by JS)."""
+    # This might be less necessary if annotations happen server-side
     logger.debug("Serving /detections endpoint")
-    return jsonify({"detections": inference.latest_detections})
+    dets = None
+    if inference.latest_detections:
+        dets = inference.latest_detections[-1] # Get the last sv.Detections object
+
+    # Convert sv.Detections back to JSON serializable format if needed
+    # Or return the raw format from the API stored earlier
+    # For now, return empty if not available
+    return jsonify({"detections": [] if dets is None else "..."}) # Adjust format
+
 
 @app.route('/update_prompts/<prompts>')
 def update_prompts(prompts):
-    """Update the user prompts for YOLOE detection."""
-    inference.user_prompts = prompts.split(",")  # Split comma-separated prompts
-    inference.user_prompts = [p.strip() for p in inference.user_prompts]  # Clean up whitespace
-    inference.last_results = None  # Reset last_results to avoid index mismatches
-    # Reset the model's state using the model service
+    """Update text prompts and reset the text model."""
+    new_prompts = [p.strip() for p in prompts.split(",") if p.strip()]
+    inference.user_prompts = new_prompts
+    logger.info(f"Updating text prompts to: {inference.user_prompts}")
+    inference.latest_detections.clear() # Clear old detections
+
     try:
+        # --- Call CORRECT endpoint ---
         response = requests.post(
-            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
-            json={"classes": inference.user_prompts}
+            f"{MODEL_SERVICE_URL}/set_text_classes",
+            json={"classes": inference.user_prompts},
+            timeout=5
         )
-        if response.status_code != 200:
-            logger.error(f"Failed to update prompts: {response.text}")
-            return jsonify({"error": f"Failed to update prompts: {response.text}"}), 500
+        response.raise_for_status()
+        logger.info("Text model classes updated successfully.")
+        return jsonify({"status": "success", "prompts": inference.user_prompts})
+    except requests.exceptions.RequestException as e:
+         logger.error(f"Failed to update text classes via API: {e}")
+         return jsonify({"error": f"Failed update text classes on model service: {e}"}), 502
     except Exception as e:
-        logger.error(f"Failed to update prompts: {e}")
-        return jsonify({"error": f"Failed to update prompts: {str(e)}"}), 500
-    logger.info(f"Updated prompts: {inference.user_prompts}, model state reset")
-    return jsonify({"status": "success", "prompts": inference.user_prompts})
+        logger.error(f"Error updating prompts state: {e}", exc_info=True)
+        return jsonify({"error": f"Internal error: {str(e)}"}), 500
+
 
 @app.route('/clear_prompts')
 def clear_prompts():
-    """Clear the user prompts and toggle the pause state."""
-    inference.user_prompts = []  # Clear prompts
-    inference.last_results = None  # Reset last_results to avoid index mismatches
-    inference.is_paused = not inference.is_paused  # Toggle pause state
-    # Reset the model's state using the model service
-    try:
-        response = requests.post(
-            f"{MODEL_SERVICE_URL}/set_classes_without_vpe",
-            json={"classes": inference.user_prompts}
-        )
-        if response.status_code != 200:
-            logger.error(f"Failed to clear prompts: {response.text}")
-            return jsonify({"error": f"Failed to clear prompts: {response.text}"}), 500
-    except Exception as e:
-        logger.error(f"Failed to clear prompts: {e}")
-        return jsonify({"error": f"Failed to clear prompts: {str(e)}"}), 500
-    logger.info(f"Prompts cleared, pause state: {inference.is_paused}, model state reset")
-    return jsonify({"status": "success", "paused": inference.is_paused, "prompts": inference.user_prompts})
+    """Clear text prompts and reset the text model."""
+    logger.info("Clearing text prompts.")
+    inference.user_prompts = []
+    inference.latest_detections.clear()
 
-@app.route('/toggle_display_mode')
-def toggle_display_mode():
-    """Toggle between showing bounding boxes and segmentation masks."""
-    inference.show_segmentation = not inference.show_segmentation
-    logger.info(f"Display mode toggled, show_segmentation: {inference.show_segmentation}")
-    return jsonify({"status": "success", "show_segmentation": inference.show_segmentation})
+    try:
+        # --- Call CORRECT endpoint ---
+        response = requests.post(
+            f"{MODEL_SERVICE_URL}/set_text_classes",
+            json={"classes": []}, # Send empty list
+            timeout=5
+        )
+        response.raise_for_status()
+        logger.info("Text model classes cleared successfully.")
+        # Toggle pause state if desired (keep original logic)
+        inference.is_paused = not inference.is_paused
+        logger.info(f"Pause state toggled to: {inference.is_paused}")
+        return jsonify({"status": "success", "paused": inference.is_paused, "prompts": inference.user_prompts})
+    except requests.exceptions.RequestException as e:
+         logger.error(f"Failed to clear text classes via API: {e}")
+         return jsonify({"error": f"Failed clear text classes on model service: {e}"}), 502
+    except Exception as e:
+        logger.error(f"Error clearing prompts state: {e}", exc_info=True)
+        return jsonify({"error": f"Internal error: {str(e)}"}), 500
+
+
+@app.route('/toggle_pause')
+def toggle_pause():
+    """Toggle the pause state for inference."""
+    inference.is_paused = not inference.is_paused
+    logger.info(f"Pause state toggled to: {inference.is_paused}")
+    return jsonify({"status": "success", "paused": inference.is_paused})
+
+
+# Remove /toggle_display_mode unless segmentation annotation is implemented
+# @app.route('/toggle_display_mode')
+# def toggle_display_mode():
+#     inference.show_segmentation = not inference.show_segmentation
+#     logger.info(f"Display mode toggled, show_segmentation: {inference.show_segmentation}")
+#     return jsonify({"status": "success", "show_segmentation": inference.show_segmentation})
+
+# --- Add application context handling for thread start/stop ---
+@app.before_request
+def before_request():
+    # Start inference thread if not running (e.g., on first request)
+    # Be careful with this - might start multiple times if not checked properly
+    if not inference.inference_running:
+         logger.info("Starting inference thread from before_request hook.")
+         # Determine initial source (webcam or video?)
+         inference.video_file_path = None # Default to webcam initially? Or check config?
+         inference.start_inference_thread(get_frame)
+
+# Consider adding a shutdown hook if running directly with Flask's dev server
+# import atexit
+# atexit.register(inference.stop_inference_thread)

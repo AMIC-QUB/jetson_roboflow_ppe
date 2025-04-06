@@ -2,40 +2,57 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>AMIC Construction PPE Detection</title>
+    <title>AMIC Construction Monitoring</title>
+    <!-- Link to your CSS file -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
   </head>
   <body>
     <h1>AMIC Construction Monitoring</h1>
-    <div class="video-container">
-      <label for="video-input">Select Video File (optional):</label>
-      <input type="file" id="video-input" accept="video/*">
-      <button id="use-webcam-btn">Use Webcam</button>
-      <button id="use-video-btn" style="display: none;">Use Video</button>
+
+    <!-- Video Source Controls -->
+    <div class="controls video-source-controls">
+      <label for="video-input">Use Video File:</label>
+      <input type="file" id="video-input" accept="video/*" style="display: none;"> <!-- Hidden initially -->
+      <button id="use-video-btn">Select Video File</button> <!-- This button triggers the input click -->
+      <button id="use-webcam-btn" style="display: none;">Switch to Webcam</button> <!-- Shown when using video -->
     </div>
+
+    <!-- Video Display Area -->
     <div class="container">
-      <img id="video-feed" src="{{ url_for('video_feed') }}" alt="Video Feed">
-      <canvas id="overlay-canvas"></canvas>
+      <!-- The video feed image - annotations are now baked in -->
+      <img id="video-feed" src="{{ url_for('video_feed') }}?nocache={{ range(1, 10000)|random }}" alt="Video Feed">
+      <!-- Removed overlay canvas -->
     </div>
-    <div class="controls">
-      <input type="text" id="prompt-input" placeholder="Enter prompts (comma-separated)" value="{{ ','.join(user_prompts) if user_prompts else '' }}">
-      <button id="update-btn">Update Prompts</button>
-      <button id="clear-btn">Clear Prompts</button>
-      <button id="toggle-mode-btn">Toggle Display Mode ({{ 'Segmentation' if show_segmentation else 'Bounding Boxes' }})</button>
+
+    <!-- Inference Controls -->
+    <div class="controls inference-controls">
+      <input type="text" id="prompt-input" placeholder="Enter text prompts (comma-separated)" value="{{ ', '.join(user_prompts) if user_prompts else '' }}">
+      <button id="update-btn">Update Text Prompts</button>
+      <button id="clear-btn">Clear Prompts & Toggle Pause</button>
+       <button id="toggle-pause-btn">Toggle Pause</button> <!-- Added explicit pause button -->
+
+      <!-- Visual Prompt Controls -->
       <a href="{{ url_for('visual_prompt') }}">
-        <button id="visual-prompt-btn" {% if visual_prompts_active %}style="background-color: #ffcc00;"{% endif %}>
-          {% if visual_prompts_active %}Clear Visual Prompts{% else %}Set Visual Prompts{% endif %}
-        </button>
+        <button id="set-visual-prompt-btn">Set Visual Prompts</button>
       </a>
+      <!-- Separate button to clear VP, shown conditionally -->
+      <button id="clear-visual-prompt-btn" style="display: none;">Clear Visual Prompts</button>
+      <span id="visual-prompt-status"></span> <!-- To show "Visual Prompts Active" -->
+
     </div>
-    <div id="warning"></div>
+
+    <!-- Warning/Status Area -->
+    <div id="warning" class="warning-area" style="display: none;"></div> <!-- Initially hidden -->
+
     <script>
       // Pass server-side variables to JavaScript
-      let userPrompts = {{ user_prompts | tojson }};
-      let isPaused = {{ is_paused | tojson }};
-      let showSegmentation = {{ show_segmentation | tojson }};
-      let usingVideo = {{ using_video | tojson }};
+      // Ensure these variables are correctly set in your Flask route
+      const userPrompts = {{ user_prompts | tojson }};
+      const isPaused = {{ is_paused | tojson }};
+      const usingVideo = {{ using_video | default(false) | tojson }}; // Default to false if not provided
+      const visualPromptsActive = {{ visual_prompts_active | default(false) | tojson }}; // Default to false
     </script>
+    <!-- Link to your updated index.js -->
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
   </body>
 </html>

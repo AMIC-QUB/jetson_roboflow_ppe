@@ -1,28 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
-    <title>AMIC Construction PPE Detection - Visual Prompt</title>
+    <title>Visual Prompt Setup</title>
+    <!-- Link to your CSS file -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/visual_prompt.css') }}">
-  </head>
-  <body>
-    <h1>AMIC Construction PPE Detection - Visual Prompt</h1>
-    <div class="prompt-container">
-      <select id="class-select"></select>
-      <button id="add-box-btn" onclick="addBox()">Add Bounding Box</button>
-      <button id="submit-btn" onclick="submitPrompt()">Submit Prompt</button>
-      <button id="back-btn" onclick="goBack()">Back to Main Page</button>
+</head>
+<body>
+    <h1>Set Visual Prompts</h1>
+    <p>Select a class, then click and drag on the image to draw a bounding box.</p>
+
+    <!-- Controls -->
+    <div class="controls" id="controls">
+        <label for="class-select">Select Class:</label>
+        <select id="class-select">
+            <!-- Options will be populated by JavaScript -->
+        </select>
+        <!-- Button below might be optional depending on UX -->
+        <!-- <button id="add-box-btn">Add Bounding Box</button> -->
+        <button id="submit-btn">Submit Visual Prompt</button>
+        <button id="back-btn">Back to Main Page</button>
     </div>
-    <div class="container">
-      <canvas id="frame-canvas"></canvas>
-      <canvas id="result-canvas"></canvas>
+
+    <!-- Drawing Area -->
+    <div class="container" id="drawing-area">
+        <canvas id="frame-canvas"></canvas> <!-- Canvas for drawing -->
     </div>
-    <div id="warning"></div>
+
+    <!-- Result Display Area (Initially Hidden) -->
+    <div class="container" id="result-display" style="display: none;">
+        <h2>Visual Prompt Result</h2>
+        <canvas id="result-canvas"></canvas> <!-- Canvas for showing result image -->
+        <div id="result-info"></div> <!-- Optional area for text results -->
+        <button id="back-btn-result" onclick="goBack()">Back to Main Page</button> <!-- Back button for results view -->
+    </div>
+
+
+    <!-- Warning/Status Area -->
+    <div id="warning" class="warning-area" style="display: none;"></div> <!-- Initially hidden -->
+
     <script>
-      // Define userPrompts and frameBase64 as global variables
-      window.userPrompts = {{ user_prompts | tojson }};
-      window.frameBase64 = "{{ frame_base64 }}";
+      // Define userPrompts and frameBase64 as global constants
+      // Ensure these are correctly passed from your Flask route for visual_prompt
+      const userPrompts = {{ user_prompts | tojson }};
+      const frameBase64 = "{{ frame_base64 }}"; // Ensure this is properly escaped if needed
     </script>
+    <!-- Link to your updated visual_prompt.js -->
     <script src="{{ url_for('static', filename='js/visual_prompt.js') }}"></script>
-  </body>
+</body>
 </html>

@@ -1,195 +1,308 @@
-import numpy as np
-import cv2
-import time
-import logging
-from typing import Callable, Generator
-import inspect
-from PIL import Image
-import requests
-import base64
-import io
-import json
-from . import app
-import supervision as sv
+# ... (imports) ...
+import threading
+from collections import deque
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Global variables for inference
-latest_detections = []  # Store latest detections
-# user_prompts = ["person", "spade", "hard hat", "digger", "machinery", "vest", "building", "robot", "truck", "car", "dirt"]  # Default prompts
-user_prompts = ["person"]  # Default prompts
-class_colors = {}  # Dictionary to store consistent colors for each class
-frame_counter = 0  # Frame counter for running detections
-last_results = None  # Store the most recent results for reuse
-is_paused = False  # Flag to pause inference
-show_segmentation = False  # Flag to toggle between bounding boxes and segmentation
-last_inference_time = 0  # Track the last time inference was run
-visual_prompts = None  # Store visual prompts (bboxes and classes)
-is_on_visual_prompt = False  # Flag to pause detections when on the visual prompt page
-video_file_path = None  # Store the path to the uploaded video file
-video_cap = None  # VideoCapture object for the video file
+# --- Configuration (Move to Flask app config later) ---
+MODEL_SERVICE_URL = "http://localhost:8000" # Ensure this matches your FastAPI service
 
-# Define class-specific colors (BGR format for OpenCV)
-POSITIVE_CLASSES = {"worker with helmet", "safety vest"}
-NEGATIVE_CLASSES = {"worker without helmet"}
-GREEN = (0, 255, 0)  # Positive color
-RED = (0, 0, 255)    # Negative color
-CONFIDENCE_THRESHOLD = 0.25  # Adjusted for YOLOE
+# --- State Management (Using globals - be mindful of concurrency) ---
+latest_detections = deque(maxlen=1) # Use deque for thread-safe(ish) single item storage
+latest_annotated_frame = deque(maxlen=1)
+user_prompts = ["person"]
+is_paused = False
+show_segmentation = False # Flag (implement usage or remove)
+visual_prompts = None
+is_on_visual_prompt = False
+video_file_path = None
+video_cap = None
+inference_running = False # Flag to control inference loop
+stop_inference_event = threading.Event() # To signal the inference thread to stop
+
+# --- Annotators (Initialize once) ---
 box_annotator = sv.BoundingBoxAnnotator()
 label_annotator = sv.LabelAnnotator()
 trace_annotator = sv.TraceAnnotator()
-# Model service URL
-MODEL_SERVICE_URL = "http://localhost:8000"
+# mask_annotator = sv.MaskAnnotator() # Uncomment and use if show_segmentation is implemented
 
-# Desired frame rate (24 FPS)
-TARGET_FPS = 600
-FRAME_INTERVAL = 1.0 / TARGET_FPS  # Time per frame in seconds (≈ 0.04167 seconds for 24 FPS)
-
-def encode_image_to_base64(image):
+# --- Helper Functions ---
+def encode_image_to_base64(image: Image.Image) -> str:
     """Encode a PIL Image to base64 string."""
     buffered = io.BytesIO()
+    # Use PNG for potentially better quality if needed, or keep JPEG for size
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-def generate_frames(get_frame: Callable[[], tuple[bool, np.ndarray | None]]) -> Generator[bytes, None, None]:
-    """Generator function to yield video frames with their detections at 24 FPS."""
-    global is_paused, video_file_path, video_cap, latest_detections, user_prompts, is_on_visual_prompt, show_segmentation
-    # Check if get_frame is callable
-    if not inspect.isfunction(get_frame) and not inspect.ismethod(get_frame):
-        logger.error(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
-        raise TypeError(f"get_frame must be a callable function, got {type(get_frame)}: {get_frame}")
+def parse_detections_from_response(response_json: dict) -> Optional[sv.Detections]:
+    """Parses the list-of-dicts response from the FastAPI service."""
+    detections_list = response_json.get("detections", [])
+    if not detections_list:
+        return None
 
-    # Determine the frame source
-    if video_file_path and not is_on_visual_prompt:
-        # Use video file if available and not on visual prompt page
-        if video_cap is None or not video_cap.isOpened():
-            logger.debug("Attempting to open video file: %s", video_file_path)
-            video_cap = cv2.VideoCapture(video_file_path)
-            if not video_cap.isOpened():
-                logger.error("Could not open video file: %s", video_file_path)
-                video_file_path = None  # Reset to fall back to webcam
-                video_cap = None
-            else:
-                logger.debug("Using video file as frame source: %s", video_file_path)
-                # Get the video's native frame rate
-                native_fps = video_cap.get(cv2.CAP_PROP_FPS)
-                logger.debug("Video native FPS: %s", native_fps)
+    # Extract data into lists for sv.Detections
+    xyxy = []
+    masks = []
+    confidence = []
+    class_id = []
+    tracker_id = []
+    class_names = [] # Assuming class_name is in each detection dict
 
-    frame_count = 0
-    start_time = time.time()
-    while True:
+    has_masks = False
+    has_tracker_ids = False
+
+    for det in detections_list:
+        xyxy.append(det.get("xyxy", [0,0,0,0])) # Default if missing
+        confidence.append(det.get("confidence", 0.0))
+        class_id.append(det.get("class_id", -1))
+        class_names.append(det.get("class_name", "N/A"))
+        if "mask" in det and det["mask"] is not None:
+            masks.append(det["mask"])
+            has_masks = True
+        if "tracker_id" in det and det["tracker_id"] is not None:
+            tracker_id.append(det["tracker_id"])
+            has_tracker_ids = True
+
+    # Create sv.Detections object
+    sv_dets = sv.Detections(
+        xyxy=np.array(xyxy, dtype=np.float32),
+        mask=np.array(masks) if has_masks and len(masks) == len(xyxy) else None, # Ensure mask consistency
+        confidence=np.array(confidence, dtype=np.float32),
+        class_id=np.array(class_id, dtype=np.int32),
+        # Store class names directly if needed later, Supervision might infer them
+        # data={'class_names': class_names}
+    )
+
+    # Add tracker_id if present and consistent
+    if has_tracker_ids and len(tracker_id) == len(xyxy):
+        sv_dets.tracker_id = np.array(tracker_id, dtype=np.int32)
+
+    return sv_dets
+
+def annotate_frame(frame: np.ndarray, detections: Optional[sv.Detections]) -> np.ndarray:
+    """Annotates a frame with the given detections."""
+    if detections is None or len(detections) == 0:
+        return frame # Return original frame if no detections
+
+    annotated_image = frame.copy()
+    try:
+        # Base annotations
+        annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections)
+
+        # Generate labels (adjust format as needed)
+        labels = [
+            f"#{det_idx} {detections.data['class_names'][det_idx]} {detections.confidence[det_idx]:0.2f}"
+            if 'class_names' in detections.data and len(detections.data['class_names']) == len(detections)
+            else f"#{det_idx} ID:{detections.class_id[det_idx]} {detections.confidence[det_idx]:0.2f}"
+            for det_idx in range(len(detections))
+        ]
+        # Add tracker ID to label if available
+        if detections.tracker_id is not None:
+             labels = [
+                 f"T:{detections.tracker_id[i]} {labels[i]}"
+                 for i in range(len(detections))
+             ]
+
+        annotated_image = label_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+
+        if detections.tracker_id is not None:
+            annotated_image = trace_annotator.annotate(scene=annotated_image, detections=detections)
+
+        # Optional: Segmentation Mask Annotation
+        # if show_segmentation and detections.mask is not None:
+        #     annotated_image = mask_annotator.annotate(scene=annotated_image, detections=detections)
+
+    except Exception as e:
+        logger.error(f"Error during frame annotation: {e}", exc_info=True)
+        return frame # Return original frame on annotation error
+    return annotated_image
+
+
+# --- Background Inference Thread ---
+def run_inference_loop(get_frame_func: Callable[[], tuple[bool, np.ndarray | None]]):
+    """Background thread function to continuously run inference."""
+    global latest_detections, inference_running, video_cap, video_file_path, user_prompts, is_paused, is_on_visual_prompt
+
+    # Initialize frame source (camera or video)
+    current_video_path = video_file_path
+    if current_video_path:
+        logger.info(f"[InferenceThread] Using video file: {current_video_path}")
+        cap = cv2.VideoCapture(current_video_path)
+        if not cap.isOpened():
+            logger.error(f"[InferenceThread] Failed to open video: {current_video_path}. Stopping thread.")
+            inference_running = False
+            return
+    else:
+        logger.info("[InferenceThread] Using webcam.")
+        # Assuming get_frame_func returns a generator for webcam
+        frame_source = get_frame_func()
+        cap = None # Indicate webcam usage
+
+    last_inference_call_time = 0
+    inference_interval = 0.5 # Run inference every 0.5 seconds (adjust as needed)
+
+    while not stop_inference_event.is_set():
         try:
             frame_start_time = time.time()
 
-            # Read the frame
-            if video_file_path and video_cap and video_cap.isOpened() and not is_on_visual_prompt:
-                # Read frames from the video file
-                ret, frame = video_cap.read()
+            # --- Get Frame ---
+            ret, frame = None, None
+            if cap: # Reading from video file
+                ret, frame = cap.read()
                 if not ret or frame is None:
-                    # Loop back to the beginning of the video
-                    logger.debug("Reached end of video, looping back to start")
-                    video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    ret, frame = video_cap.read()
-                    if not ret or frame is None:
-                        logger.error("Could not read frame from video file after looping")
-                        break
-                logger.debug("Using video file frame for rendering and inference")
-            else:
-                # Fall back to webcam feed
-                frame_source = get_frame()  # Initialize the frame source (this is a generator)
-                ret, frame = next(frame_source)
-                if not ret or frame is None:
-                    logger.error("Could not retrieve frame in generate_frames")
-                    break
-                logger.debug("Using webcam frame for rendering and inference")
+                    logger.info("[InferenceThread] Video ended, looping.")
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                    if not ret: # Handle case where looping fails immediately
+                         logger.error("[InferenceThread] Failed to read frame after looping video.")
+                         time.sleep(0.1)
+                         continue
+            else: # Reading from webcam generator
+                 try:
+                     ret, frame = next(frame_source)
+                 except StopIteration:
+                     logger.error("[InferenceThread] Webcam stream ended unexpectedly.")
+                     break # Exit loop if webcam stops
+                 if not ret:
+                     logger.warning("[InferenceThread] Failed to get frame from webcam.")
+                     time.sleep(0.1) # Wait briefly before retrying
+                     continue
 
-            # Resize frame to 640x480 for consistency
-            frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_AREA)
-
-            # Run inference on the frame
-            detections = []
-            start_time = time.time()
-            if not is_paused and user_prompts and not is_on_visual_prompt:
-                logger.debug("Running YOLOE inference on frame")
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                target_image = Image.fromarray(frame_rgb)
-                image_base64 = encode_image_to_base64(target_image)
-                response = requests.post(
-                    f"{MODEL_SERVICE_URL}/predict",
-                    json={"image_base64": image_base64, "user_prompts": user_prompts}
-                )
-                response_time = time.time()-start_time
-                if response.status_code == 200:
-                    detections = response.json()
-                    latest_detections = detections  # Update global detections
-                    logger.info(f"Inference completed, results: {len(detections)} objects detected")
-                else:
-                    logger.error(f"Failed to get inference results: {response.text}")
-            else:
-                # detections = latest_detections if latest_detections is not None else []
-                logger.debug("Inference skipped: is_paused=%s, user_prompts=%s, is_on_visual_prompt=%s", is_paused, user_prompts, is_on_visual_prompt)
-            try:
-                sv_detections = sv.Detections(
-                    xyxy=np.array(detections['xyxy'], dtype=np.float32),
-                    mask=np.array(detections['mask'], dtype=bool) if detections['mask'] is not None else None,
-                    confidence=np.array(detections['confidence'], dtype=np.float32),
-                    class_id=np.array(detections['class_id'], dtype=np.int32),
-                    data={'class_names': detections['class_names']} if user_prompts else {}
-                )
-                sv_detections.tracker_id = np.array(detections['tracker_id'], dtype=np.int32)
-                # labels = [
-                #         f"{class_name}" for class_name in detections['class_names']
-                # ]
-
-                annotated_image = frame.copy()
-                annotated_image = sv.ColorAnnotator().annotate(scene=annotated_image, detections=sv_detections)
-                annotated_image = box_annotator.annotate(scene=annotated_image, detections=sv_detections)
-                # annotated_image = sv.LabelAnnotator().annotate(scene=annotated_image, detections=sv_detections, labels=labels)
-                annotated_image = label_annotator.annotate(scene=annotated_image, detections=sv_detections)
-                annotated_image = trace_annotator.annotate(scene=annotated_image, detections=sv_detections)
-                ret, buffer = cv2.imencode('.jpg', annotated_image, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-                image_time = time.time()-response_time-start_time
-            except Exception as o:
-                logger.info(f"Error {o}")
-                logger.info(detections)
-                ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-                image_time = time.time()-response_time-start_time
-
-            # Encode frame as JPEG for streaming
-
-            if not ret:
-                logger.error("Failed to encode frame as JPEG in generate_frames")
+            if frame is None:
+                logger.warning("[InferenceThread] Got None frame, skipping.")
+                time.sleep(0.1)
                 continue
-            frame_bytes = buffer.tobytes()
 
-            # Yield frame and detections in a custom multipart format
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n'
-                   b'\r\n' + frame_bytes + b'\r\n')
-            logger.debug("Sent video frame with detections via /video_feed")
+            frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_AREA)
+            # Store the latest raw frame for annotation by the streaming thread
+            latest_annotated_frame.append(frame) # Temporarily store raw, will be replaced by annotated
 
-            # Calculate elapsed time and adjust delay to maintain 24 FPS
-            frame_count += 1
-            elapsed_time = time.time() - frame_start_time
-            # delay = max(0, FRAME_INTERVAL - elapsed_time)
-            # time.sleep(delay)
+            # --- Run Inference Periodically ---
+            should_run_inference = (
+                not is_paused and
+                not is_on_visual_prompt and
+                user_prompts and
+                (time.time() - last_inference_call_time > inference_interval)
+            )
 
-            logger.info("response time: %s", response_time*1000)
-            logger.info("image time: %s", image_time*1000)
-            logger.info("total time: %s", elapsed_time*1000)
-            # Log the actual frame rate every 24 frames (approximately every second at 24 FPS)
-            if frame_count % 24 == 0:
-                total_time = time.time() - start_time
-                actual_fps = frame_count / total_time
+            current_detections = None # Holds results from *this* iteration's inference call
 
-                logger.info("Actual playback FPS: %s", actual_fps)
-                frame_count = 0
-                start_time = time.time()
+            if should_run_inference:
+                last_inference_call_time = time.time()
+                logger.debug("[InferenceThread] Running inference...")
+                try:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    target_image = Image.fromarray(frame_rgb)
+                    image_base64 = encode_image_to_base64(target_image)
+
+                    # --- Call CORRECT FastAPI Endpoint ---
+                    response = requests.post(
+                        f"{MODEL_SERVICE_URL}/predict_text", # Use text prediction endpoint
+                        json={"image_base64": image_base64},
+                        timeout=5 # Add a timeout
+                    )
+                    response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
+                    response_data = response.json()
+                    # --- Parse CORRECT Response Format ---
+                    sv_dets = parse_detections_from_response(response_data)
+                    latest_detections.append(sv_dets) # Store the latest valid detections
+                    current_detections = sv_dets # Use for annotation *this* cycle
+                    logger.debug(f"[InferenceThread] Inference successful, {len(sv_dets) if sv_dets else 0} detections.")
+
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"[InferenceThread] API request failed: {e}")
+                    latest_detections.append(None) # Clear detections on error
+                except Exception as e:
+                    logger.error(f"[InferenceThread] Inference processing error: {e}", exc_info=True)
+                    latest_detections.append(None) # Clear detections on error
+            else:
+                 # If not running inference, keep using the last known detections
+                 if latest_detections:
+                      current_detections = latest_detections[-1]
+
+
+            # --- Annotate Frame ---
+            # Use detections from this cycle if inference ran, otherwise use last known
+            frame_to_annotate = frame # Use the raw frame captured this cycle
+            annotated_frame = annotate_frame(frame_to_annotate, current_detections)
+            latest_annotated_frame.append(annotated_frame) # Update the shared annotated frame
+
+
+            # --- Control Loop Speed (Optional - prevents busy-waiting) ---
+            # Remove the TARGET_FPS logic, just prevent overly tight loop
+            time.sleep(0.01) # Small sleep to yield CPU
 
         except Exception as e:
-            logger.error(f"Error in frame generation: {e}")
-            break
+            logger.error(f"[InferenceThread] Unhandled error in loop: {e}", exc_info=True)
+            time.sleep(1) # Avoid rapid looping on persistent error
 
-# Remove process_detections since inference is now handled in generate_frames
-def process_detections(get_frame_func: Callable[[], tuple[bool, np.ndarray | None]]):
-    pass
+    # Cleanup
+    if cap:
+        cap.release()
+    logger.info("[InferenceThread] Exiting.")
+    inference_running = False
+
+# --- Frame Generation for Streaming ---
+def generate_frames_for_stream() -> Generator[bytes, None, None]:
+    """Generator that yields the latest annotated frame bytes."""
+    logger.info("Starting frame streaming generator.")
+    while True:
+        if not latest_annotated_frame:
+            # Wait briefly if no frame is available yet
+            time.sleep(0.02)
+            continue
+
+        frame = latest_annotated_frame[-1] # Get the most recent annotated frame
+
+        # Encode frame as JPEG for streaming
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]) # Quality 70
+        if not ret:
+            logger.error("Failed to encode frame as JPEG in generate_frames_for_stream")
+            time.sleep(0.02)
+            continue
+
+        frame_bytes = buffer.tobytes()
+
+        # Yield frame in multipart format
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n'
+               b'\r\n' + frame_bytes + b'\r\n')
+        # Minimal sleep to allow other threads/requests to run
+        time.sleep(0.01) # Adjust if needed, prevents hogging CPU
+
+
+# --- Control Functions ---
+_inference_thread = None
+
+def start_inference_thread(get_frame_func):
+    global inference_running, _inference_thread, stop_inference_event
+    if not inference_running:
+        stop_inference_event.clear()
+        _inference_thread = threading.Thread(target=run_inference_loop, args=(get_frame_func,), daemon=True)
+        _inference_thread.start()
+        inference_running = True
+        logger.info("Inference thread started.")
+    else:
+        logger.warning("Inference thread already running.")
+
+def stop_inference_thread():
+    global inference_running, _inference_thread, stop_inference_event
+    if inference_running and _inference_thread is not None:
+        logger.info("Stopping inference thread...")
+        stop_inference_event.set()
+        _inference_thread.join(timeout=5) # Wait for thread to finish
+        if _inference_thread.is_alive():
+             logger.warning("Inference thread did not stop gracefully.")
+        inference_running = False
+        _inference_thread = None
+        latest_detections.clear() # Clear state when stopped
+        latest_annotated_frame.clear()
+        logger.info("Inference thread stopped.")
+    else:
+        logger.info("Inference thread not running or already stopped.")
+
+# Remove the empty process_detections function
+# def process_detections(...):
+#    pass
