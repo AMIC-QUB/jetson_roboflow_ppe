@@ -7,15 +7,13 @@ LABEL description="Build stage for React frontend"
 WORKDIR /app/frontend
 
 # Copy package files and install dependencies
-COPY frontend/package.json frontend/yarn.lock ./
-# Use yarn if you use yarn.lock, otherwise use npm and package-lock.json
-RUN yarn install --frozen-lockfile
-
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
 # Copy the rest of the frontend source code
 COPY frontend/ /app/frontend/
 
 # Build the React application for production
-RUN yarn build
+RUN npm run build
 # Output will be in /app/frontend/dist
 
 

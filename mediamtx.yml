@@ -1,0 +1,35 @@
+# mediamtx.yml (minimal configuration)
+
+# Log level (optional)
+logLevel: info
+
+# RTSP Listener configuration
+rtspAddress: :8554 # Listen on all interfaces, port 8554
+
+# Define API endpoint (optional but useful for monitoring)
+apiAddress: :9997
+
+# Define WebRTC endpoint (optional, if you want to view via browser directly)
+# webrtcAddress: :8889
+
+# Define HLS endpoint (optional)
+# hlsAddress: :8888
+
+# Define paths (streams)
+paths:
+# The path the publisher script will stream to
+webcam:
+  # You can add source settings here if needed, but often the publisher defines them
+  # Example: Restrict publishing source IP (if known)
+  # source: rtsp
+  # sourceOnDemand: yes
+  # publishUser: myuser # Optional: Credentials for publishing
+  # publishPass: mypass # Optional: Credentials for publishing
+  # readUser: myuser    # Optional: Credentials for reading
+  # readPass: mypass    # Optional: Credentials for reading
+  runOnInit: echo "Stream /webcam ready to accept publisher."
+  runOnReady: echo "Publisher connected to /webcam"
+  runOnNotReady: echo "Publisher disconnected from /webcam"
+
+# You can define other paths if needed
+# another_stream:

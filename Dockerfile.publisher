@@ -1,0 +1,31 @@
+# Dockerfile.publisher
+FROM python:3.10-slim
+
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description="Webcam RTSP Publisher using OpenCV and FFmpeg"
+
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC
+
+# Install dependencies: python, pip, opencv prerequisites, ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    libgl1 \
+    ffmpeg \
+    # Add libsm6 libxext6 only if OpenCV install complains
+    # libsm6 libxext6 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install OpenCV Python library
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir opencv-python-headless # Headless is usually fine
+
+# Set working directory
+WORKDIR /app
+
+# Copy the publisher script
+COPY ./webcam/ /app/
+
+# Command to run the publisher script
+CMD ["python3", "/app/webcam_rtsp_publisher.py"]

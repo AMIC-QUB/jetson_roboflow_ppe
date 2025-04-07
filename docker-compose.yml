@@ -1,31 +1,66 @@
-version: '3.8' # Use a recent version
+version: '3.8'
 
 services:
   inference-service:
     build:
-      context: . # Build context is the directory containing this compose file
-      dockerfile: Dockerfile.inference # Specify the Dockerfile for this service
+      context: .
+      dockerfile: Dockerfile.inference
     container_name: ppe-inference-service
+    # env_file: .env.inference # Alternative to mounting .env file
     ports:
-      - "8000:8000" # Map host port 8000 to container port 8000
+      - "8000:8000" # FastAPI port
+      - "9997:9997" # Optional: mediamtx API port
     volumes:
-      # Mount the local .env file into the container at /app/.env
-      - ./.env.inference:/app/.env.inference:ro # Read-only mount
-      # Mount the local models directory into the container at /app/models
-      - ./models:/app/models:ro # Read-only mount is safer if models aren't modified
-    environment:
-      # You can override or set additional non-secret env vars here if needed
-      - LOG_LEVEL=INFO # Example override
-      # Ensure the .env file is read by pydantic-settings in your FastAPI app
+      - ./.env.inference:/app/.env.inference:ro
+      - ./models:/app/models:ro
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Or 'all'
-              capabilities: [gpu] # Request GPU capabilities
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
-    # Add healthcheck if desired
+    healthcheck: # Optional: Basic check if service is up
+        test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"] # Assumes /health endpoint exists
+        interval: 30s
+        timeout: 5s
+        retries: 3
+
+  rtsp-server:
+    image: bluenviron/mediamtx:latest # Use official mediamtx image
+    container_name: ppe-rtsp-server
+    ports:
+      - "8554:8554" # RTSP port
+      # Add other ports if using WebRTC/HLS/RTMP from mediamtx.yml
+      # - "8889:8889" # WebRTC
+      # - "1935:1935" # RTMP
+    volumes:
+      # Mount the configuration file into the container
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    restart: unless-stopped
+
+  webcam-publisher:
+    build:
+      # Create a simple Dockerfile or build context for the publisher script
+      context: . # Assuming webcam_rtsp_publisher.py is in the root
+      dockerfile: Dockerfile.publisher # Create this new Dockerfile (see below)
+    container_name: ppe-webcam-publisher
+    environment:
+      # Tell the script where to publish the stream (using service name)
+      - RTSP_PUBLISH_URL=rtsp://rtsp-server:8554/webcam
+      # Optional overrides for camera settings
+      - CAMERA_DEVICE_INDEX=0
+      - FRAME_WIDTH=640
+      - FRAME_HEIGHT=480
+      - FPS=20
+    devices:
+      # --- IMPORTANT: Grant access to the webcam device ---
+      # Check your host system device name (might be /dev/video1 etc.)
+      - "/dev/video0:/dev/video0"
+    depends_on:
+      - rtsp-server # Start RTSP server first
+    restart: unless-stopped
 
   web-server:
     build:
@@ -33,25 +68,25 @@ services:
       dockerfile: Dockerfile.flask
     container_name: ppe-web-server
     ports:
-      - "5000:5000" # Map host port 5000 to container port 5000
+      - "5000:5000" # Flask port
     environment:
-      # Pass the URL for the inference service to the Flask container
-      # Uses the service name 'inference-service' defined above
+      # Tell Flask where to find the RTSP *stream*
+      - RTSP_STREAM_URL=rtsp://rtsp-server:8554/webcam
+      # Tell Flask where to find the FastAPI *API*
       - MODEL_SERVICE_URL=http://inference-service:8000
-      # Add any other environment variables needed by Flask
-      # - FLASK_ENV=production # Example
+      # Ensure Flask uses the env var: Add logging in Flask to confirm
+      - FLASK_ENV=production # Use 'development' for debug mode (requires flask dev deps)
     depends_on:
-      - inference-service # Start inference service first (doesn't guarantee readiness)
+      # Depends logically on both, but mainly needs API available
+      # Healthcheck on inference-service helps ensure it's somewhat ready
+      - inference-service
+      - rtsp-server # Ensure stream source *might* be available
     restart: unless-stopped
-    # volumes:
-      # Example: Mount logs if Flask logs to a file
-      # - ./flask_logs:/app/logs
 
 # Optional: Define the external network if needed, otherwise uses default bridge
 # networks:
 #  default:
 #    driver: bridge
 
-# Optional: Define named volumes if needed instead of host mounts
-# volumes:
-#  model_data:
+volumes:
+  model_data: # Define named volume for models (alternative to host mount)
